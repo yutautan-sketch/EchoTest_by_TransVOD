@@ -4,7 +4,7 @@ from pathlib import Path
 from util.make_clear import make_clear
 
 def extract_frames(video_path, 
-                   output_root='./output', 
+                   output_root='./data/vid/Data/VID/val/without_anno', 
                    max_frame_num=300, 
                    img_ext='.jpg', 
                    ):
@@ -40,4 +40,4 @@ def extract_frames(video_path,
     cap.release()
     print(f"Saved {frame_idx+1} frames to: {output_dir}")
 
-extract_frames('video_name.mp4', clearing=True)
+extract_frames('video_name.mp4')
