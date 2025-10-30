@@ -38,6 +38,6 @@ def extract_frames(video_path,
         frame_idx += 1
 
     cap.release()
-    print(f"Saved {frame_idx+1} frames to: {output_dir}")
+    print(f"Saved {frame_idx} frames to: {output_dir}")
 
 extract_frames('video_name.mp4')
