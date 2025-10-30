@@ -47,3 +47,7 @@ python util/vid_2_frames.py
 ```
 bash inf.sh
 ```
+
+4.\
+ディレクトリ`/results/without_anno/score=0.0_giou=0.0/frame_video_name`内に検出結果が保存される (`frame_00001.jpg`)\
+特に: 頭蓋骨の測定結果は`result.jpg`、大腿骨の追跡結果は`traj_vis`ディレクトリに保存される
