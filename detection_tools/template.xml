@@ -1,0 +1,26 @@
+<annotation>
+	<folder>test</folder>
+	<filename>template.jpg</filename>
+	<path>/home/kodaira/modeltest/echo_test/test/template.jpg</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>480</width>
+		<height>480</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>leg</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>1</xmin>
+			<ymin>1</ymin>
+			<xmax>10</xmax>
+			<ymax>10</ymax>
+		</bndbox>
+	</object>
+</annotation>
