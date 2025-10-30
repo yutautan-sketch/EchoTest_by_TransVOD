@@ -39,9 +39,7 @@ python util/vid_2_frames.py
 ```
 --output_dir results/without_anno/score=0.0_giou=0.0/frame\
 ```
-
-4.\
-`inf.sh`を実行
+その後`inf.sh`を実行
 ```
 bash inf.sh
 ```
