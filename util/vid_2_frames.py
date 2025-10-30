@@ -19,7 +19,7 @@ def extract_frames(video_path,
     if not cap.isOpened():
         raise IOError(f"Failed to open video: {video_path}")
 
-    frame_idx = 0
+    frame_idx = 1
     while True:
         if frame_idx > max_frame_num: 
             print(f"Frames num is over {max_frame_num}")
@@ -30,7 +30,7 @@ def extract_frames(video_path,
             break
 
         # 出力ファイルパスを構築
-        filename = f"{frame_idx:06d}{img_ext}"
+        filename = f"{video_name}_all_{frame_idx:05d}{img_ext}"
         frame_path = output_dir / filename
 
         # フレームを保存（BGR）
