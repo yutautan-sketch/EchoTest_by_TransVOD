@@ -87,8 +87,9 @@ EchoTest_by_TransVOD/
                     ├── traj_vis
                     │   ├── trajectory_seg0.jpg
                     │   ├── ...
+                    ├── result.jpg
+                    ├── result_body.jpg
                     ├── frame_00001.jpg
                     ├── frame_00002.jpg
                     ├── ...
-                    ├── result_
 ```
