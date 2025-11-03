@@ -37,11 +37,31 @@ EchoTest_by_TransVOD/
 2.\
 動画(例:`video_name.mp4`)を用意して、`./util/vid_2_frames.py`43行目を以下の様に編集
 ```
-extract_frames('video_name.mp4')
+40     cap.release()
+41     print(f"Saved {frame_idx} frames to: {output_dir}")
+42
+43 extract_frames('video_name.mp4')
 ```
-以下を実行して、動画をフレームに分割 (`./data/vid/Data/VID/val/video_name/video_name_all_00001.jpg`)
+デフォルトでは300枚までの分割となるので、より多くしたい場合は`max_frame_num`に任意の値を入れてください
+```
+43 extract_frames('video_name.mp4', max_frame_num=1e+5)  # 大きな数字を入力すれば全フレームを分割して終了します
+```
+以下を実行して、動画をフレームに分割
 ```
 python util/vid_2_frames.py
+```
+実行後、以下のディレクトリの存在を確認
+```
+EchoTest_by_TransVOD/
+└── data
+    └── vid
+        └── Data
+            └── VID
+                └── val
+                    └── without_anno
+                        ├── video_name_all_00001.jpg
+                        ├── video_name_all_00002.jpg
+                        ├── ...
 ```
 
 3.\
@@ -55,5 +75,20 @@ bash inf.sh
 ```
 
 4.\
-ディレクトリ`/results/without_anno/score=0.0_giou=0.0/frame_video_name`内に検出結果が保存される (`frame_00001.jpg`)\
-頭蓋骨の測定結果は`result.jpg`、腹部の測定結果は`result_body.jpg`、大腿骨の追跡結果は`traj_vis`ディレクトリに保存される
+ディレクトリ`/results/without_anno/score=0.0_giou=0.0/checkpoint____/frame_video_name`内に検出結果が保存されます\
+頭蓋骨の測定結果は`result.jpg`、腹部の測定結果は`result_body.jpg`、大腿骨の追跡結果は`traj_vis`ディレクトリに保存されます
+```
+EchoTest_by_TransVOD/
+└── results/
+    └── without_anno/
+        └── score=0.0_giou=0.0/
+            └── checkpoint____/
+                └── frame_video_name/
+                    ├── traj_vis
+                    │   ├── trajectory_seg0.jpg
+                    │   ├── ...
+                    ├── frame_00001.jpg
+                    ├── frame_00002.jpg
+                    ├── ...
+                    ├── result_
+```
