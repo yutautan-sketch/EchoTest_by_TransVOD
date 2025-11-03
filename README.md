@@ -76,7 +76,7 @@ bash inf.sh
 
 4.\
 ディレクトリ`/results/without_anno/score=0.0_giou=0.0/checkpoint____/frame_video_name`内に検出結果が保存されます\
-頭蓋骨の測定結果は`result.jpg`、腹部の測定結果は`result_body.jpg`、大腿骨の追跡結果は`traj_vis`ディレクトリに保存されます
+頭蓋骨の測定結果は`result_head.jpg`、腹部の測定結果は`result_body.jpg`、大腿骨の追跡結果は`traj_vis`ディレクトリに保存されます
 ```
 EchoTest_by_TransVOD/
 └── results/
@@ -87,7 +87,7 @@ EchoTest_by_TransVOD/
                     ├── traj_vis
                     │   ├── trajectory_seg0.jpg
                     │   ├── ...
-                    ├── result.jpg
+                    ├── result_head.jpg
                     ├── result_body.jpg
                     ├── frame_00001.jpg
                     ├── frame_00002.jpg

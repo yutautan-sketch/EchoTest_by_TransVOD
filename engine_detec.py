@@ -175,7 +175,7 @@ def measure_head(
 
     ellipse, tilt_direction, img_vis = result
     print(f"傾き方向: {tilt_direction}")
-    cv2.imwrite(os.path.join(result_path, f"result.jpg"), img_vis)
+    cv2.imwrite(os.path.join(result_path, f"result_head.jpg"), img_vis)
     
     return {
         "frame_idx": best_frame_idx,
@@ -221,7 +221,7 @@ def measure_body(frames_bboxes,
     h, w, _ = frame_img.shape
     best_box = best_box[0] * np.array([w, h, w, h])  # スケーリング
     bbox_img = crop_image_with_margin(frame_img, best_box, 0.03, 0.03)
-    if debugmode == 0:
+    if debugmode > 0:
         cv2.imwrite(os.path.join(result_path, f"result_cropped_body.jpg"), bbox_img)
     
     # 3. 測定結果を得る

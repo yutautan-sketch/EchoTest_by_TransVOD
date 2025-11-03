@@ -291,6 +291,6 @@ def draw_tracking_on_white_canvas(frames_bboxes,
             cv2.line(canvas, c1, c2, (255, 0, 0), 2)
             cv2.circle(canvas, c2, 3, (255, 0, 0), -1)
 
-        save_path = os.path.join(save_dir, f"trajectory_seg{seg_id}.png")
+        save_path = os.path.join(save_dir, f"trajectory_seg{seg_id}.jpg")
         cv2.imwrite(save_path, canvas)
         print(f"[Saved] Segment {seg_id}: {save_path}")
