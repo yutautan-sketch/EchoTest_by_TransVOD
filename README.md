@@ -24,8 +24,14 @@ python setup.py build develop --user
 また`./exps/ViT_model`ディレクトリを作成し、ViTのパラメーターファイル`falx_model_ViT_epoch___.pth`を置く
 ```
 # 以下の存在を確認
-./results/transvod/param_name/checkpoint____.pth
-./exps/ViT_model/falx_model_ViT_epoch___.pth
+EchoTest_by_TransVOD/
+├── results/
+│   └── transvod/
+│       └── param_name/
+│           └──checkpoint____.pth
+└── exps/
+    └── ViT_model/
+        └── falx_model_ViT_epoch___.pth
 ```
 
 2.\
