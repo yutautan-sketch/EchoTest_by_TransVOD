@@ -3,7 +3,6 @@ import cv2
 import copy
 import torch
 import numpy as np
-from collections import defaultdict
 
 # ========= ユーティリティ関数 =========
 def bbox_center(bbox):
@@ -16,62 +15,6 @@ def bbox_center(bbox):
         raise ValueError(f"Invalid bbox shape: {bbox}")
     cx, cy, w, h = bbox
     return np.array([cx, cy])
-
-def collect_class_predictions(all_frame_preds, target_classes, score_threshold=0.0):
-    """
-    特定クラスの予測BBoxとスコアをフレーム順に抽出する。
-
-    Args:
-        all_frame_preds (dict):
-            {frame_idx: [{"boxes": Tensor(4,), "logits": Tensor(C,), "labels": int}, ...]} の構造
-        target_classes ([int]):
-            抽出対象のクラスIDリスト
-        score_threshold (float):
-            このスコア未満の予測は除外する
-        
-    Returns:
-        frames_bboxes ({target_class: list}):
-            各フレームごとの [(bbox, logits), ...] のリスト
-            （trim_inactive_regions() に直接渡せる形式）
-        new_dict (dict):
-            特定クラス(target_class)を除外した新しい all_frame_preds
-    """
-    # frame_idx順にソートして統一
-    sorted_frames = sorted(all_frame_preds.keys())
-    target_classes = sorted(target_classes) if isinstance(target_classes, (list, tuple)) else [target_classes]
-    frames_bboxes = {target_class: [] for target_class in target_classes}
-    new_dict = {}
-
-    for frame_idx in sorted_frames:
-        frame_preds = all_frame_preds[frame_idx]
-        filtered_bboxes = {target_class: [] for target_class in target_classes}
-        remaining_preds = []
-
-        for pred in frame_preds:
-            label = pred["labels"]
-            logits = pred["logits"]
-            bbox = pred["boxes"]
-            
-            # logits と bbox の形式を統一
-            if not isinstance(logits, torch.Tensor):
-                logits = torch.tensor(logits, dtype=torch.float32)
-
-            is_target = False
-            for target_class in target_classes:
-                # クラススコアの取得
-                score = logits[target_class].item() if logits.ndim == 1 else logits.squeeze()[target_class].item()
-                # クラス一致かつスコア閾値通過のみ抽出
-                if label == target_class and score >= score_threshold:
-                    filtered_bboxes[target_class].append((bbox.tolist(), logits))
-                    is_target = True
-            if not is_target:
-                remaining_preds.append(pred)
-
-        for target_class in target_classes:
-            frames_bboxes[target_class].append(filtered_bboxes[target_class])
-        new_dict[frame_idx] = remaining_preds
-
-    return frames_bboxes, new_dict
 
 # ========= 区間抽出 =========
 def trim_inactive_regions(frames_bboxes, min_valid=5, min_segment_length=2):
@@ -351,77 +294,3 @@ def draw_tracking_on_white_canvas(frames_bboxes,
         save_path = os.path.join(save_dir, f"trajectory_seg{seg_id}.png")
         cv2.imwrite(save_path, canvas)
         print(f"[Saved] Segment {seg_id}: {save_path}")
-
-# ========= 追跡の実行 =========
-def track_boxes_dp(
-    frames_bboxes,
-    all_frame_preds,
-    all_frame_preds_o,
-    track_label_num,
-    max_skip,
-    device,
-    result_path=None
-    ):
-    """
-    frames_bboxes より軌跡決定 -> all_frame_preds に再編入する。
-    """
-    all_frame_preds = copy.deepcopy(all_frame_preds)
-    all_frame_preds_o = copy.deepcopy(all_frame_preds_o)
-    
-    # 1. 連続区間を取り出す
-    trimmed_bboxes = trim_inactive_regions(frames_bboxes)
-    
-    # 2. 軌跡を決定
-    all_trajectories = []
-    for seg in trimmed_bboxes:  # seg = 1つの検出区間
-        traj = extract_smoothest_trajectory_dp(
-            seg,
-            target_class=track_label_num,
-            top_k=2,
-            max_rel_dist=0.05,
-            alpha=2.0,
-            beta=0.1,
-            gamma_skip=0.05,
-            max_skip=max_skip,
-            new_start_penalty=0.5,
-            lambda_len=0.18,
-        )
-        if traj:  # 空でなければ追加
-            all_trajectories.extend(traj)
-    print("all_trajectories length", len(all_trajectories))
-    
-    # 3. 軌跡を all_frame_preds に再編入
-    for traj in all_trajectories:
-        for frame_idx, bbox, logits in traj:
-            all_frame_preds[frame_idx].append({
-                "boxes": torch.tensor(bbox, dtype=torch.float32, device=device),
-                "logits": logits if isinstance(logits, torch.Tensor) else torch.tensor(logits, 
-                                                                                        dtype=torch.float32, 
-                                                                                        device=device),
-                "labels": int(track_label_num)
-            })
-    
-    # 4. 空フレーム（2.を通して予測が全除外されたフレーム）を補完
-    for frame_idx in all_frame_preds:
-        if len(all_frame_preds[frame_idx]) == 0:
-            # all_frame_preds_o の予測クエリを再入力
-            pred_o = all_frame_preds_o[frame_idx]
-            new_preds = []
-            for p_o in pred_o:
-                new_preds.append({
-                    "boxes": p_o["boxes"],
-                    "logits": p_o["logits"],
-                    "labels": 0  # 背景クラス扱い
-                })
-            all_frame_preds[frame_idx] = new_preds
-    
-    # 5. 軌跡を描画して保存
-    if result_path is not None:
-        os.makedirs(result_path, exist_ok=True)
-        draw_tracking_on_white_canvas(
-            frames_bboxes=all_frame_preds, 
-            all_trajectories=all_trajectories,
-            save_dir=result_path
-        )
-
-    return all_frame_preds

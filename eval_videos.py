@@ -147,13 +147,8 @@ def main(args, opt):
         import util.misc as utils
         
     else:
-        from engine_multi import evaluate_whole_video_custom, measure_object
+        from engine_multi import evaluate_whole_video_custom
         from engine_map import evaluate_with_map
-        from detection_tools.trajectory_dp import (
-            collect_class_predictions,
-            track_boxes_dp
-        )
-        #from engine_map_backup import evaluate_with_map
         import util.misc_multi as utils
 
     print(args.dataset_file)
@@ -328,6 +323,13 @@ def main(args, opt):
     start_time = time.time()
     
     if draw_frames:
+        from engine_detec import (
+            collect_class_predictions,
+            measure_head,
+            measure_body,
+            track_boxes_dp
+        )
+        
         val_path = f'./data/vid/Data/VID/val/{DET_opt[3]}_val'
         if not os.path.exists(val_path):
             raise ValueError(f'Unknown or Undefined validation dataset: {val_path}')
@@ -403,7 +405,7 @@ def main(args, opt):
             
             if len(track_label_num) == 3:
                 # 2. クラス1 (頭) の測定
-                _ = measure_object(
+                _ = measure_head(
                     vid_path=video_path,
                     result_path=f'{output_dir_path}_{video_name}', 
                     frames_bboxes=frames_bboxes[1],
@@ -413,7 +415,20 @@ def main(args, opt):
                     device=device
                 )
                 
-                # 3. クラス3 (大腿骨) の追跡
+                # 3. クラス2 (腹部) の測定
+                _ = measure_body(
+                    frames_bboxes=frames_bboxes[2],
+                    target_label_num=2,
+                    vid_path=video_path,
+                    device=device,
+                    result_path=f'{output_dir_path}_{video_name}',
+                    combine_num=2,
+                    mask_size=0.95,
+                    mask_mode='ellipse',
+                    debugmode=0
+                )
+                
+                # 4. クラス3 (大腿骨) の追跡
                 _ = track_boxes_dp(
                     frames_bboxes=frames_bboxes[3],
                     all_frame_preds=all_frame_preds,
@@ -423,7 +438,7 @@ def main(args, opt):
                     device=device,
                     result_path=f'{output_dir_path}_{video_name}/traj_vis'
                 )
-            input("Push any key to continue...")
+            # input("Push any key to continue...")
             
     else:
         Path(output_dir_path).mkdir(parents=True, exist_ok=True)

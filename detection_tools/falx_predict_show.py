@@ -113,9 +113,7 @@ def update_ellipse(pts, ellipse, head_slope):
     return updated_ellipse
 
 
-# BBoxが楕円内にあるか判別する 
-# memo:250311
-# 少しはみ出てもOKにするか検討
+# BBoxが楕円内にあるか判別する
 def is_bb_inside_ellipse(ellipse, bb):
     """
     楕円:ellipseの内部にバウンディングボックス bb が完全に含まれるか判定する。
@@ -519,12 +517,12 @@ class HeadTiltDetector:
                     # さらにいくつか条件づける(ハイパーパラメータ)
                     if any([
                         # アスペクト比が大きすぎる
-                        max(ellipse[1]) / min(ellipse[1]) > self.aspect_ratio_thresh, 
+                        max(axes) / min(axes) > self.aspect_ratio_thresh, 
                         # 楕円の中心が画像の中心から大きくずれている
                         abs(center[0] - img_w / 2) > img_w * 0.2,
                         abs(center[1] - img_h / 2) > img_h * 0.2,
-                        # 楕円の面積が画像の面積に対して小さすぎる
-                        (max(ellipse[1]) * min(ellipse[1])) / (img_w * img_h) < 0.65
+                        # 楕円にフィットする矩形範囲が画像の面積に対して小さすぎる
+                        (max(axes) * min(axes)) / (img_w * img_h) < 0.65,
                         ]): 
                         if debugmode==2:
                             print("1:", max(ellipse[1]) / min(ellipse[1]), ">", self.aspect_ratio_thresh)
