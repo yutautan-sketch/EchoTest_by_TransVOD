@@ -65,14 +65,7 @@ EchoTest_by_TransVOD/
 ```
 
 3.\
-`inf.sh`の29行目を編集
-```
-26     --num_frames 12\
-25     --with_box_refine\
-28     --dilation\
-29     --output_dir results/without_anno/score=0.0_giou=0.0/frame\
-```
-その後`inf.sh`を実行
+`inf.sh`を実行
 ```
 bash inf.sh
 ```
