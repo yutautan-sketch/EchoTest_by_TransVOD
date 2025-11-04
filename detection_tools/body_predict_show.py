@@ -90,13 +90,13 @@ def body_detect(img,
     
     # ---- 2.4 CLAHE + 輝度補正二値化による補助マスク ----
     if mask_mode == 'ellipse':
-        # 楕円マスク作成(各辺長の一定割合)
+        # 楕円マスク作成
         center = (w // 2, h // 2)
         axes = (int(w * mask_size / 2), int(h * mask_size / 2))
         border = np.ones_like(img, np.uint8) * 255
         cv2.ellipse(border, center, axes, 0, 0, 360, 0, -1)  # 中心黒・外側白
     elif mask_mode == 'rectangle':
-        # ---- 長方形マスク作成（各軸の9割）----
+        #  長方形マスク作成
         margin_x = int(w * ((1-mask_size)/2))
         margin_y = int(h * ((1-mask_size)/2))
         border = np.ones_like(img, np.uint8) * 255
