@@ -71,8 +71,7 @@ def extract_smoothest_trajectory_dp(segment,
                                     lambda_len=0.01,        # 軌跡長へのボーナス
                                     ):
     """
-    DP法で最も滑らかな軌跡を抽出する（誤検出に頑健）。
-    遷移が存在すれば必ず継続を優先し、新規開始は孤立時のみ。
+    DP法で最も滑らかな軌跡を抽出する
     計算概要：
     軌跡がフレーム m のBBox番号 j まで続いたとして、フレーム n のBBox番号 i のコスト dp[n,i]を以下の様に決定する。
     if dist[(n,i),(m,j)] <= max_rel_dist * (n-m):
