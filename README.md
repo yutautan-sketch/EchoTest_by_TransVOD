@@ -1,3 +1,41 @@
+### ライセンス/License:
+このプロジェクトは TransVOD (Qianyu Zhou, Lu He, 2022, https://github.com/SJTU-LuHe/TransVOD, https://github.com/qianyuzqy/TransVOD_Lite) を一部改変し作成されています。\
+TransVOD および関連プロジェクトは Apache License 2.0 の下で公開されています。\
+本リポジトリのコードも、同ライセンスの条件に従います。
+
+This project is a modified version based on TransVOD 
+(Qianyu Zhou, Lu He, 2022; https://github.com/SJTU-LuHe/TransVOD, https://github.com/qianyuzqy/TransVOD_Lite). \
+TransVOD and related works are released under the Apache License 2.0,
+and this repository follows the same license terms.
+```
+Modified by Kodaira Yuta
+------------------------------------------------------------------------
+Modified from TransVOD
+Copyright (c) 2022 Qianyu Zhou et al. All Rights Reserved.
+Licensed under the Apache License, Version 2.0 [see LICENSE for details]
+------------------------------------------------------------------------
+Modified from Deformable DETR
+Copyright (c) 2020 SenseTime. All Rights Reserved.
+Licensed under the Apache License, Version 2.0 [see LICENSE for details]
+------------------------------------------------------------------------
+Modified from DETR (https://github.com/facebookresearch/detr)
+Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+
+Copyright 2025 Kodaira Yuta
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
 ### 注意!:
 推論はCPU環境で実行可能ですが、学習にはGPU(CUDA)環境が必須です。\
 また、CPU/GPU環境の違いによって挙動に差異が発生する可能性があります。
