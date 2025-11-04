@@ -26,7 +26,7 @@ python eval_videos.py\
      --num_frames 12\
      --with_box_refine\
      --dilation\
-     --output_dir results/femur_251019_mini_val/score=0.0_giou=0.0/hbl_251017_mm=0.7_topk=3_boxes=gt/frame\
+     --output_dir results/without_anno/score=0.0_giou=0.0/frame\
      --dataset_file vid_multi\
      --vid_path ./data/vid\
      --enc_layers 3\
