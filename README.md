@@ -65,7 +65,7 @@ python setup.py build develop --user
 EchoTest_by_TransVOD/
 ├── results/
 │   └── transvod/
-│       └── param_name/
+│       └── hbl_yymmdd_~/
 │           └──checkpoint____.pth
 └── exps/
     └── ViT_model/
