@@ -53,12 +53,12 @@ python util/vid_2_frames.py
 実行後、以下のディレクトリの存在を確認
 ```
 EchoTest_by_TransVOD/
-└── data
-    └── vid
-        └── Data
-            └── VID
-                └── val
-                    └── without_anno
+└── data/
+    └── vid/
+        └── Data/
+            └── VID/
+                └── val/
+                    └── without_anno/
                         ├── video_name_all_00001.jpg
                         ├── video_name_all_00002.jpg
                         ├── ...
@@ -67,7 +67,10 @@ EchoTest_by_TransVOD/
 3.\
 `inf.sh`の29行目を編集
 ```
---output_dir results/without_anno/score=0.0_giou=0.0/frame\
+26     --num_frames 12\
+25     --with_box_refine\
+28     --dilation\
+29     --output_dir results/without_anno/score=0.0_giou=0.0/frame\
 ```
 その後`inf.sh`を実行
 ```
@@ -84,7 +87,7 @@ EchoTest_by_TransVOD/
         └── score=0.0_giou=0.0/
             └── checkpoint____/
                 └── frame_video_name/
-                    ├── traj_vis
+                    ├── traj_vis/
                     │   ├── trajectory_seg0.jpg
                     │   ├── ...
                     ├── result_head.jpg
