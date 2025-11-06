@@ -200,6 +200,7 @@ def measure_body(frames_bboxes,
     
     # 1. frames_bboxes より最大スコアのBBoxを得る
     best_score = -float('inf')
+    best_frame_idx = None
     best_box = None
     frame_path = ""
     vid_name = os.path.basename(vid_path)
@@ -209,6 +210,7 @@ def measure_body(frames_bboxes,
             score = torch.softmax(logits, dim=-1)[0, target_label_num].item()  # 確信度
             if score > best_score:
                 best_score = score
+                best_frame_idx = frame_idx
                 best_box = torch.tensor(bbox).to(device)
                 best_box = box_ops.box_cxcywh_to_xyxy(best_box.unsqueeze(0))[0].cpu().numpy()  # xyxy
                 frame_path = f"{vid_path}/{vid_name}_all_{frame_idx:05d}.jpg" 
@@ -226,7 +228,7 @@ def measure_body(frames_bboxes,
     
     # 3. 測定結果を得る
     bbox_img = cv2.cvtColor(bbox_img, cv2.COLOR_BGR2GRAY)
-    result = body_detect(
+    result, ellipse, circle = body_detect(
         img=bbox_img,
         max_attempt=max_attempt,
         combine_num=combine_num,
@@ -236,7 +238,13 @@ def measure_body(frames_bboxes,
     )
     if result is not None:
         cv2.imwrite(os.path.join(result_path, f"result_body.jpg"), result)
-    return result
+    return {
+        "frame_idx": best_frame_idx,
+        "score": best_score,
+        "ellipse": ellipse, 
+        "circle": circle,
+        "image": result
+    }
 
 # leg
 def track_boxes_dp(

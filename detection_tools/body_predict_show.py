@@ -69,6 +69,8 @@ def body_detect(img,
                 debugmode):
     img_cp = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     h, w = img.shape
+    best_ellipse = None
+    best_circle = None
     
     # ---- 1. ノイズ除去（平滑化）----
     blur = cv2.bilateralFilter(img, 9, 5, 5)  # 輪郭を保持した平滑化
@@ -90,13 +92,13 @@ def body_detect(img,
     
     # ---- 2.4 CLAHE + 輝度補正二値化による補助マスク ----
     if mask_mode == 'ellipse':
-        # 楕円マスク作成
+        # 楕円マスク作成(各辺長の一定割合)
         center = (w // 2, h // 2)
         axes = (int(w * mask_size / 2), int(h * mask_size / 2))
         border = np.ones_like(img, np.uint8) * 255
         cv2.ellipse(border, center, axes, 0, 0, 360, 0, -1)  # 中心黒・外側白
     elif mask_mode == 'rectangle':
-        #  長方形マスク作成
+        # ---- 長方形マスク作成（各軸の9割）----
         margin_x = int(w * ((1-mask_size)/2))
         margin_y = int(h * ((1-mask_size)/2))
         border = np.ones_like(img, np.uint8) * 255
@@ -139,10 +141,16 @@ def body_detect(img,
                             cv2.ellipse(img_cp, ellipse, (0, 255, 0), 2)
                             cv2.drawContours(img_cp, [final_contour], -1, (255, 0, 255), 2)
                         cv2.ellipse(img_cp, elli_filtered, (0, 255, 255), 2)
+                        best_ellipse = (center, axes, angle)
                         break
         
         combine_num += 1
         attempt += 1
+        if debugmode > 0:
+            print(f"combine_num -> {combine_num}")
+            print(f"1: {abs(center[0] - w / 2)} < {w * 0.2}")
+            print(f"2: {abs(center[1] - h / 2)} < {h * 0.2}")
+            print(f"3: {(max(axes) * min(axes)) / (w * h)} >= 0.63")
     
     # ---- 3.2 円フィッティング(Hough) ----
     circles = cv2.HoughCircles(
@@ -161,12 +169,20 @@ def body_detect(img,
     if circles is not None:
         circles = np.round(circles[0, :]).astype("int")
         for x, y, r in circles:
-            # TODO (x, y) が画像中心 (w/2, h/2) 付近でないなら除外する
-            cv2.circle(img_cp, (x, y), r, (255, 255, 0), 2)
-            cv2.circle(img_cp, (x, y), 2, (0, 0, 255), 3)
-            print(f"腹部測定結果: ({x}, {y}), 半径={r}")
-            break
-        return img_cp
+            if all([
+                # 楕円の中心が画像の中心から大きくずれていない
+                abs(x - w / 2) < w * 0.2,
+                abs(y - h / 2) < h * 0.2,
+                # 楕円にフィットする矩形範囲が画像の面積に対して小さすぎない
+                (4 * r * r) / (w * h) >= 0.63,
+            ]):
+                # TODO (x, y) が画像中心 (w/2, h/2) 付近でないなら除外する
+                cv2.circle(img_cp, (x, y), r, (255, 255, 0), 2)
+                cv2.circle(img_cp, (x, y), 2, (0, 0, 255), 3)
+                print(f"腹部測定結果: ({x}, {y}), 半径={r}")
+                best_circle = (x, y, r)
+                break
+        return img_cp, best_ellipse, best_circle
     else:
         print("腹部の測定に失敗しました。")
         return None
