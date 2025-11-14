@@ -1,4 +1,8 @@
-# Modified by Qianyu Zhou and Lu He
+# Modified by Kodaira Yuta
+# ------------------------------------------------------------------------
+# Modified from TransVOD
+# Copyright (c) 2022 Qianyu Zhou et al. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
 # ------------------------------------------------------------------------
 # Modified from Deformable DETR
 # Copyright (c) 2020 SenseTime. All Rights Reserved.
@@ -6,7 +10,6 @@
 # ------------------------------------------------------------------------
 # Modified from DETR (https://github.com/facebookresearch/detr)
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-# ------------------------------------------------------------------------
 
 """
 COCO dataset which returns image_id for evaluation.
@@ -32,6 +35,8 @@ class CocoDetection(TvCocoDetection):
     def __init__(self, img_folder, ann_file, transforms, return_masks, num_frames=4, 
                  is_train=True,  filter_key_img=True,  cache_mode=False, local_rank=0, local_size=1, 
                  debugmode=False):
+        # 0508_9 ここで画像フォルダとアノテーションファイルを指定 次：このファイル
+        # または 次：datasets/torchvision_datasets/coco.py
         super(CocoDetection, self).__init__(img_folder, ann_file, 
                                             cache_mode=cache_mode, local_rank=local_rank, local_size=local_size)
         self._transforms = transforms
@@ -62,9 +67,9 @@ class CocoDetection(TvCocoDetection):
         ann_ids = coco.getAnnIds(imgIds=img_id)
         target = coco.loadAnns(ann_ids)
         img_info = coco.loadImgs(img_id)[0]
-        path = img_info['file_name']
+        path = img_info['file_name']  # 0508_10 ここで画像のパスを取得 次：このファイル
         video_id = img_info['video_id']
-        img = self.get_image(path)
+        img = self.get_image(path)  # 0508_11 ここで画像をロード
         target = {'image_id': img_id, 'video_id': video_id, 'annotations': target}
         img, target = self.prepare(img, target)
         imgs.append(img)
@@ -273,8 +278,9 @@ def make_coco_transforms(image_set):
 
 
 def build(image_set, args, opt, debugmode=False):
-    root = Path(args.vid_path)
+    root = Path(args.vid_path)  # 0508_6 ここで--vid_pathで指定したファイル名を取得 次：このファイル
     assert root.exists(), f'provided COCO path {root} does not exist'
+    # 0508_7.1 訓練/検証アノテーションファイルの名前を変える場合はここの ~.json を修正
     mode = 'instances'
     
     PATHS = {
@@ -286,8 +292,12 @@ def build(image_set, args, opt, debugmode=False):
     }
     
     datasets = []
+    # 0508_7 ここでPATHS['val']を取得 次：このファイル
     for (img_folder, ann_file) in PATHS[image_set]:
         print("path:", PATHS[image_set])
+        # 0508_8 ここでデータセットを作成 次：このファイル
+        # 例えば args.vid_path = data/vid なら
+        # img_folder=data/vid/Data/VID, ann_file=data/vid/annotations/~.json
         dataset = CocoDetection(img_folder, 
                                 ann_file, 
                                 transforms=make_coco_transforms(image_set), 

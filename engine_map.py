@@ -399,14 +399,14 @@ def evaluate_with_map(model, data_loader, device,
                 
     # --- Step 1.5: 特定クラスの追跡処理 ---
     if track_label_num is not None and track_label_num > 0:
-        from detection_tools.trajectory_dp import collect_class_predictions, track_boxes_dp
+        from engine_detec import collect_class_predictions, track_boxes_dp
         print("===== TRACKING =====")
         # 特定クラスを抽出
         frames_bboxes_o, all_frame_preds = collect_class_predictions(all_frame_preds_o, track_label_num)
         frames_bboxes = frames_bboxes_o[track_label_num]
         
         # 追跡処理
-        all_frame_preds = track_boxes_dp(
+        all_frame_preds, _ = track_boxes_dp(
             frames_bboxes=frames_bboxes,
             all_frame_preds=all_frame_preds,
             all_frame_preds_o=all_frame_preds_o,
@@ -539,7 +539,7 @@ def evaluate_with_map(model, data_loader, device,
         plt.ylabel("Precision")
         plt.grid(True)
         plt.savefig(f"result_{cls}.jpg")
-        plt.show()
+        # plt.show()
     
     # 5. mAP算出
     mAP, ap_dict = compute_mean_ap(precision, recall, method='interp')
@@ -559,4 +559,4 @@ def evaluate_with_map(model, data_loader, device,
     df_ap.loc[len(df_ap)] = {"class": "mAP", "AP": mAP}
     df_ap.to_csv(f"{result_path}/eval_results.csv", index=False)
 
-    return precision, recall, mAP, ap_dict
+    return all_frame_preds, precision, recall, mAP, ap_dict

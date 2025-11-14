@@ -1,4 +1,8 @@
-# Modified by Qianyu Zhou and Lu He
+# Modified by Kodaira Yuta
+# ------------------------------------------------------------------------
+# Modified from TransVOD
+# Copyright (c) 2022 Qianyu Zhou et al. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
 # ------------------------------------------------------------------------
 # Modified from Deformable DETR
 # Copyright (c) 2020 SenseTime. All Rights Reserved.
@@ -6,7 +10,6 @@
 # ------------------------------------------------------------------------
 # Modified from DETR (https://github.com/facebookresearch/detr)
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-# ------------------------------------------------------------------------
 
 """
 Deformable DETR model and criterion classes.
@@ -361,8 +364,8 @@ class SetCriterion(nn.Module):
         
         # NOTE here set class_weights to balance the loss of each class
         # None as default
-        class_weights = [[1.0, 2.75],  # apply these weights when target is 0
-                         [1.0, 4.95]]  # apply these weights when target is 1
+        class_weights = [[0.2, 0.8, 1.0, 3.0],  # apply these weights when target is 0
+                         [0.2, 0.8, 1.0, 3.0]]  # apply these weights when target is 1
         class_weights = torch.tensor(class_weights).to(src_logits.device) if class_weights is not None else None
 
         # NOTE if 1 vs multi matching is used, loss should be devided by the number of positive queries additionaly.

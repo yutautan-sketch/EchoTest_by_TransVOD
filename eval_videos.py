@@ -1,4 +1,8 @@
-# Modified by Qianyu Zhou and Lu He
+# Modified by Kodaira Yuta
+# ------------------------------------------------------------------------
+# Modified from TransVOD
+# Copyright (c) 2022 Qianyu Zhou et al. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
 # ------------------------------------------------------------------------
 # Modified from Deformable DETR
 # Copyright (c) 2020 SenseTime. All Rights Reserved.
@@ -6,7 +10,6 @@
 # ------------------------------------------------------------------------
 # Modified from DETR (https://github.com/facebookresearch/detr)
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-# ------------------------------------------------------------------------
 
 # クラス数が models/deformable_detr_multi or deformable_detr_single でハードコードされているため注意
 
@@ -19,6 +22,7 @@ from pathlib import Path
 
 import os
 import re
+import cv2
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -422,14 +426,14 @@ def main(args, opt):
                     vid_path=video_path,
                     device=device,
                     result_path=f'{output_dir_path}_{video_name}',
-                    combine_num=2,
+                    combine_num=1,
                     mask_size=0.95,
                     mask_mode='ellipse',
                     debugmode=0
                 )
                 
                 # 4. クラス3 (大腿骨) の追跡
-                _ = track_boxes_dp(
+                _, _ = track_boxes_dp(
                     frames_bboxes=frames_bboxes[3],
                     all_frame_preds=all_frame_preds,
                     all_frame_preds_o=all_frame_preds_o,
@@ -442,17 +446,55 @@ def main(args, opt):
             
     else:
         Path(output_dir_path).mkdir(parents=True, exist_ok=True)
-        precision, recall, mAP, ap_dict = evaluate_with_map(
+        all_frame_preds, precision, recall, mAP, ap_dict = evaluate_with_map(
             model=model, 
             data_loader=data_loader_val, 
             device=device, 
             result_path=f"./{output_dir_path}", 
-            track_label_num=1,
+            track_label_num=3,  # femur -> 1 / hbl -> 3
             min_valid_segment=5,  # basically 3~5
             score_threshold=score_threshold, 
             giou_threshold=giou_threshold
         )
-
+        
+        # ---- 測定処理の精度評価 ----
+        from engine_detec import (
+            collect_class_predictions,
+            measure_head,
+            measure_body,
+            track_boxes_dp,
+        )
+        from util.temp import (
+            group_frames_by_video,
+            map_case_to_video,
+        )
+        from engine_meas import (
+            meas_error_head
+        )
+        # HACK opt を参照して path を指定する様に修正する
+        frames_bboxes, all_frame_preds = collect_class_predictions(all_frame_preds, [1, 2, 3])
+        val_json_path = "/home/kodaira/modeltest/TransVOD_Lite/data/vid/annotations/Anno_val/anno_hbl_251111_val.json"
+        case_json_path = "/home/kodaira/modeltest/TransVOD_Lite/detection_tools/anno_hbl_251107_case.json"
+        val_path = f'./data/vid/Data/VID/val/{DET_opt[3]}_val'
+        
+        # 0.1 アノテーションJSONファイルを参照して video_id ごとに frame_idをまとめる
+        video_to_frames = group_frames_by_video(val_json_path)
+        
+        # 0.2 測定用アノテーションJSONファイルを参照して case_id ごとに video_id をまとめる
+        case_to_videos = map_case_to_video(case_json_path, val_json_path)
+        
+        # 1. 頭の測定誤差評価
+        for i in range(3):
+            meas_error_head(
+                frames_bboxes=frames_bboxes,
+                video_to_frames=video_to_frames,
+                case_to_videos=case_to_videos,
+                val_path=val_path,
+                output_dir_path=output_dir_path,
+                adjust_num=i+1,
+                device=device
+            )
+        
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Evaluation time {}'.format(total_time_str))
@@ -461,10 +503,9 @@ def main(args, opt):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     
-    DET_opt = ['BLANK', 'BLANK', 'BLANk',
-               # 上の3つは変更する必要なし（訓練データ設定のため）
-               'femur_251019_mini',         # 検証アノテーションJSONのオプション名 (anno_{}_val.json の{}内)
-               'quux',              # 拡張用
+    DET_opt = ['BLANK', 'BLANK', 'BLANK', 'BLANK',
+               # 上の4つは変更する必要なし
+               'BLANK',              # 拡張用
                ]
     
     parser = argparse.ArgumentParser('Deformable DETR training and evaluation script', parents=[get_args_parser()])

@@ -73,12 +73,16 @@ def extract_smoothest_trajectory_dp(segment,
     """
     DP法で最も滑らかな軌跡を抽出する
     計算概要：
-    軌跡がフレーム m のBBox番号 j まで続いたとして、フレーム n のBBox番号 i のコスト dp[n,i]を以下の様に決定する。
+    軌跡がフレーム m のBBox番号 j まで続いたとして、フレーム n のBBox番号 i のコスト dp[n,i] を以下の様に決定する。
+    initial_cost = -beta*log(score[n,i]) + new_start_penalty
     if dist[(n,i),(m,j)] <= max_rel_dist * (n-m):
-        dp[n,i] = min(dp[m,j] + alpha * dist[(n,i),(m,j)] - beta * log(score[n,i]) + gamma_skip * (n-m-1))
+        dp[n,i] = min(
+            dp[m,j] + alpha * dist[(n,i),(m,j)] - beta * log(score[n,i]) + gamma_skip * (n-m-1),
+            initial_cost
+        )
     else:
-        dp[n,i] = -beta*log(score[n,i]) + new_start_penalty
-    dp[n,i] = dp[n,i] - lambda_len * length(dp[n,i])
+        dp[n,i] = initial_cost
+    dp[n,i] = dp[n,i] - lambda_len * (length(dp[n,i])-1)
     
     Args:
         segment (list): trim_inactive_regions の1区間の出力

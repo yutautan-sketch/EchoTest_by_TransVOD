@@ -469,7 +469,6 @@ class HeadTiltDetector:
             contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if debugmode==2:
                 cv2.imwrite("binary.jpg", binary)
-                input("Push any key to continue...")
             
             # 輪郭をフィルタリング
             valid_contours = self.filter_valid_contours(contours)
@@ -490,12 +489,8 @@ class HeadTiltDetector:
             ellipse = self.fit_ellipse(combined_contour) 
             if ellipse:
                 if debugmode==2:
-                    print('DEBUG', ellipse) 
                     cv2.ellipse(self.img, ellipse, (0, 255, 0), 2)  # debug
                     cv2.imwrite("Head_Tilt_Detection.jpg", self.img)
-                    # cv2.imshow("Head Tilt Detection", self.img)
-                    # cv2.waitKey(0)
-                    # cv2.destroyAllWindows()
                 
                 # 楕円の面積と画像内に収まる部分の面積を計算
                 center, axes, angle = ellipse
@@ -511,25 +506,22 @@ class HeadTiltDetector:
                 mask = np.zeros_like(gray)
                 cv2.ellipse(mask, ellipse, 255, -1)
                 inside_area = cv2.countNonZero(cv2.bitwise_and(mask, mask, mask=gray))
+                cv2.imwrite("count_mask.jpg", mask)
                 
                 # 画像外にはみ出すなら再試行
-                if ellipse_area > 0 and (ellipse_area - inside_area) / ellipse_area <= 0.3:
+                if ellipse_area > 0 and (ellipse_area - inside_area) / ellipse_area <= 0.5:
                     # さらにいくつか条件づける(ハイパーパラメータ)
+                    elli_center = np.array([(center[0]/img_w), (center[1]/img_h)])  # 正規化された中心座標
+                    img_center = np.array([0.5, 0.5])
                     if any([
                         # アスペクト比が大きすぎる
                         max(axes) / min(axes) > self.aspect_ratio_thresh, 
                         # 楕円の中心が画像の中心から大きくずれている
-                        abs(center[0] - img_w / 2) > img_w * 0.2,
-                        abs(center[1] - img_h / 2) > img_h * 0.2,
+                        np.linalg.norm(elli_center - img_center) > 0.08,
                         # 楕円にフィットする矩形範囲が画像の面積に対して小さすぎる
-                        (max(axes) * min(axes)) / (img_w * img_h) < 0.65,
+                        (max(axes) * min(axes)) / (img_w * img_h) < 0.7,
                         ]): 
-                        if debugmode==2:
-                            print("1:", max(ellipse[1]) / min(ellipse[1]), ">", self.aspect_ratio_thresh)
-                            print("2:", abs(center[0] - img_w / 2), ">", img_w * 0.2)
-                            print("3:", abs(center[1] - img_h / 2), ">", img_h * 0.2)
-                            print("4:", (max(ellipse[1]) * min(ellipse[1])) / (img_w * img_h), "<", 0.65)
-                            input("Push any key to continue...")
+                        print(f"redo: {max(axes) / min(axes)} | {np.linalg.norm(elli_center - img_center)} | {(max(axes) * min(axes)) / (img_w * img_h)}")
                         if self.combine_num < contours_num:
                             self.combine_num += 1  # 他の輪郭を取り入れる
                         else: 
@@ -537,28 +529,31 @@ class HeadTiltDetector:
                             increased_thresh -= 10 
                         attempt += 1
                         continue
-                
                 else:
+                    print(f"redo: {(ellipse_area - inside_area) / ellipse_area}")
                     increased_thresh += 5
                     attempt += 1
                     continue
                 
-                # 結合後の輪郭から一定間隔でサンプリングし、対応する楕円上の点との距離を計算
-                final_contour = self.sample_contour_points(combined_contour, ellipse)
-                
-                # サンプリングおよび補完した点があれば、それらをひとまとめにして最終輪郭として利用
-                if final_contour is not None:
-                    if debugmode==2: 
-                        cv2.drawContours(self.img, [final_contour], -1, (255, 0, 255), 2)
-                        cv2.imwrite("Head_Tilt_Detection.jpg", self.img)
-                        input("Push any key to continue...")
-                    hull = cv2.convexHull(final_contour)
-                    ellipse = self.fit_ellipse(hull)
+                if attempt < 1:
                     break
                 else:
-                    increased_thresh -= 10
-                    attempt += 1
-                    continue
+                    # 結合後の輪郭から一定間隔でサンプリングし、対応する楕円上の点との距離を計算
+                    final_contour = self.sample_contour_points(combined_contour, ellipse)
+                    
+                    # サンプリングおよび補完した点があれば、それらをひとまとめにして最終輪郭として利用
+                    if final_contour is not None:
+                        if debugmode==2: 
+                            cv2.drawContours(self.img, [final_contour], -1, (255, 0, 255), 2)
+                            cv2.imwrite("Head_Tilt_Detection.jpg", self.img)
+                            # input("Push any key to continue...")
+                        hull = cv2.convexHull(final_contour)
+                        ellipse = self.fit_ellipse(hull)
+                        break
+                    else:
+                        increased_thresh -= 10
+                        attempt += 1
+                        continue
             else: 
                 increased_thresh -= 10
                 attempt += 1
@@ -573,11 +568,6 @@ class HeadTiltDetector:
         
         # 楕円の取得
         ellipse = self.process_ellipse_detection(debugmode=debugmode)
-        if debugmode>0: 
-            cv2.imwrite("Head_Tilt_Detection.jpg", self.img)
-            # cv2.imshow("Head Tilt Detection", self.img)
-            # cv2.waitKey(0)
-            # cv2.destroyAllWindows()
         if ellipse is None:
             print("適切な楕円が見つかりませんでした。")
             return None
@@ -588,7 +578,7 @@ class HeadTiltDetector:
             angle -= 180
         tilt_direction = "left" if angle > 0 else "right"
 
-        cv2.ellipse(self.img, ellipse, (200, 100, 200), 2)
+        cv2.ellipse(self.img, ellipse, (200, 0, 200), 2)
         
         # 傾きを短径で表示
         center_point = (int(center[0]), int(center[1]))
@@ -605,9 +595,6 @@ class HeadTiltDetector:
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
         if debugmode>0: 
             cv2.imwrite("Head_Tilt_Detection.jpg", self.img)
-            # cv2.imshow("Head Tilt Detection", self.img)
-            # cv2.waitKey(0)
-            # cv2.destroyAllWindows()
         
         return ellipse, tilt_direction, self.img
 

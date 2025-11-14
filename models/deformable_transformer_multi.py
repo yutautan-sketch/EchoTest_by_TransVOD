@@ -1,4 +1,8 @@
-# Modified by Qianyu Zhou and Lu He
+# Modified by Kodaira Yuta
+# ------------------------------------------------------------------------
+# Modified from TransVOD
+# Copyright (c) 2022 Qianyu Zhou et al. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
 # ------------------------------------------------------------------------
 # Modified from Deformable DETR
 # Copyright (c) 2020 SenseTime. All Rights Reserved.
@@ -6,7 +10,6 @@
 # ------------------------------------------------------------------------
 # Modified from DETR (https://github.com/facebookresearch/detr)
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-# ------------------------------------------------------------------------
 
 import copy
 from typing import Optional, List
@@ -318,8 +321,6 @@ class DeformableTransformer(nn.Module):
             # loss: [bs, 50, d_model]
 
             # QFH_3(Query Clip'')
-            # HACK last topk should be less than 30?
-            # last_topk = 3  # Originally 30
             new_hs, last_reference_out = update_QFH(temp_class_embed_list[1], new_hs, last_reference_out, last_topk)  # [bs, 50, d_model] -> [bs, last_topk, d_model]
             new_hs_list = torch.chunk(new_hs, self.num_frames, dim = 0)
             new_hs = torch.cat(new_hs_list, 1)  # [1, bs * last_topk, d_model]

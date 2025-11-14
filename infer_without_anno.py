@@ -1,4 +1,8 @@
-# Modified by Qianyu Zhou and Lu He
+# Modified by Kodaira Yuta
+# ------------------------------------------------------------------------
+# Modified from TransVOD
+# Copyright (c) 2022 Qianyu Zhou et al. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
 # ------------------------------------------------------------------------
 # Modified from Deformable DETR
 # Copyright (c) 2020 SenseTime. All Rights Reserved.
@@ -6,7 +10,6 @@
 # ------------------------------------------------------------------------
 # Modified from DETR (https://github.com/facebookresearch/detr)
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-# ------------------------------------------------------------------------
 
 # クラス数が models/deformable_detr_multi or deformable_detr_single でハードコードされているため注意
 
@@ -143,6 +146,7 @@ def get_args_parser():
 
 
 def main(args, opt):
+    print(args.dataset_file, 11111111)
     if args.dataset_file == "coco":
         from engine_single import evaluate, train_one_epoch
         import util.misc as utils
@@ -352,7 +356,7 @@ if __name__ == '__main__':
                'Data_hbl_251017',    # 訓練データディレクトリ名 (上で指定したディレクトリ下がすぐにDETなら '' とする)
                'hbl_251017',         # アノテーションJSONのオプション名 (anno_{}.json の{}内)
                'hbl_250805',         # 検証アノテーションJSONのオプション名 (anno_{}_val.json の{}内)
-               'BLANK',              # 拡張用
+               'quux',              # 拡張用
                ]
     print(f"DET option is {DET_opt}")
     

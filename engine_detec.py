@@ -73,7 +73,8 @@ def measure_head(
     target_label_num, 
     model,
     transform,
-    device
+    device,
+    normalize_ellipse: bool = False
     ):
     """
     特定クラスを抽出し、最大スコアのBBoxに HeadTiltDetector を適用する。
@@ -93,18 +94,22 @@ def measure_head(
             分類モデルへ渡すための前処理
         device (torch.device):
             デバイス
+        normalize_ellipse (bool): 
+            True の場合、楕円を回転補正込みで正規化
         
     Returns:
         dict or None:
             検出結果(失敗時は None)
     """
     from detection_tools.falx_predict_show import HeadTiltDetector
+    os.makedirs(result_path, exist_ok=True)
+    vid_name = os.path.basename(vid_path)
     
     # 0. HeadTiltDetector の初期化
     detector = HeadTiltDetector(
-        distance_thresh=0.05,
+        distance_thresh=0.08,
         thresh_addition=0,
-        target_sample_count=50,
+        target_sample_count=150,
         neighbor_ratio=0.05,
         max_attempts=10,
         aspect_ratio_thresh=1.4,
@@ -114,56 +119,65 @@ def measure_head(
     
     # 1. 特定クラスの最大確信度予測を抽出
     bbox_imgs = []  # bbox_imgs[frame_idx] = [h, w, c]
-
+    
     # 1.1 各フレームの中で最もスコアが高いBBoxを集める
-    vid_name = os.path.basename(vid_path)
     for frame_idx, preds in enumerate(frames_bboxes, start=1):
         best_score = -float('inf')
         best_box = None
         
-        # 該当フレームを特定
-        frame_path = f"{vid_path}/{vid_name}_all_{frame_idx:05d}.jpg"  
-        frame_img = cv2.imread(frame_path)
-        if frame_img is None:
-            print(f"Frame image not found: {frame_path}")
-            exit(1)
-        
         # 最大スコアのBBoxを探索
         for bbox, logits in preds:
-            score = torch.softmax(logits, dim=-1)[0, target_label_num].item()  # 確信度
+            # score = torch.softmax(logits, dim=-1)[0, target_label_num].item()  # 確信度
+            score = torch.sigmoid(logits[0, target_label_num]).item()
             if score > best_score:
                 best_score = score
                 best_box = torch.tensor(bbox).to(device)
                 best_box = box_ops.box_cxcywh_to_xyxy(best_box.unsqueeze(0))[0].cpu().numpy()  # xyxy
         if best_box is None:
-            # print(f"Frame {frame_idx}: No bbox found for label {target_label_num}.")
             continue
         
         # 最大スコアBBoxの画像を保存
-        h, w, _ = frame_img.shape
-        best_box = best_box[0] * np.array([w, h, w, h])  # スケーリング
-        bbox_img = crop_image_with_margin(frame_img, best_box, 0.0, 0.0)
-        bbox_imgs.append([frame_idx, bbox_img])
+        bbox_imgs.append([frame_idx, best_box])
     
     if len(bbox_imgs) == 0:
-        print(f"ラベル {target_label_num} の検出が見つかりません。")
+        # print(f"ラベル {target_label_num} の検出が見つかりません。")
         return None
     
     # 1.2 全BBox画像を model に入力してクラス0スコアで順位付け
-    for i, (frame_idx, bbox_img) in enumerate(bbox_imgs):
-        bbox_img = Image.fromarray(cv2.cvtColor(bbox_img, cv2.COLOR_BGR2RGB))
-        input_tensor = transform(bbox_img).unsqueeze(0).to(device)  # [1, C, H, W]
+    best_frame_idx = 0
+    best_frame_img = None
+    best_box_coord = None
+    best_box_img = None
+    best_score = -float('inf')
+    for i, (frame_idx, best_box) in enumerate(bbox_imgs):
+        # 該当フレームを特定 -> torch.tensor に変換
+        frame_path = f"{vid_path}/{vid_name}_all_{frame_idx:05d}.jpg"  
+        frame_img = cv2.imread(frame_path)
+        if frame_img is None:
+            print(f"Frame image not found: {frame_path}")
+            exit(1)
+        frame_img_pil = Image.fromarray(cv2.cvtColor(frame_img, cv2.COLOR_BGR2RGB))
+        input_tensor = transform(frame_img_pil).unsqueeze(0).to(device)  # [1, C, H, W]
+        
+        # BBoxの画像を取得
+        h, w, _ = frame_img.shape
+        best_box = best_box[0] * np.array([w, h, w, h])  # スケーリング
+        bbox_img = crop_image_with_margin(frame_img, best_box, 0.0, 0.0)
+        # bbox_img_pil = Image.fromarray(cv2.cvtColor(bbox_img, cv2.COLOR_BGR2RGB))
+        # input_tensor = transform(bbox_img_pil).unsqueeze(0).to(device)  # [1, C, H, W]
+        
+        # モデルに入力
         with torch.no_grad():
             output = model(input_tensor)
-            score = torch.softmax(output, dim=1)[0, 0].item()  # クラス0のスコア
+            # score = torch.softmax(output, dim=1)[0, 0].item()  # クラス0のスコア
+            score = torch.sigmoid(output[0, 0]).item()  # クラス0のスコア
             
-            bbox_imgs[i].append(score)  # bbox_imgs[i] = [frame_idx, bbox_img, score]
-
-    bbox_imgs.sort(key=lambda x: x[2], reverse=True)  # スコアで高順ソート
-    best_frame_idx, best_box_img, best_score = bbox_imgs[0][0], bbox_imgs[0][1], bbox_imgs[0][2]
-    print(f"Best frame idx: {best_frame_idx}, Best score: {best_score}")
-    
-    # cv2.imwrite(os.path.join(result_path, f"cropped.jpg"), cropped)
+            if score > best_score:
+                best_frame_idx = frame_idx
+                best_frame_img = frame_img
+                best_box_coord = best_box
+                best_box_img = bbox_img
+                best_score = score
     cv2.imwrite("cropped.jpg", best_box_img)
     
     # 2. HeadTiltDetector で傾き検出
@@ -173,16 +187,52 @@ def measure_head(
         print("楕円フィッティングに失敗しました。")
         return None
 
+    # 楕円の位置を元画像準拠に
     ellipse, tilt_direction, img_vis = result
-    print(f"傾き方向: {tilt_direction}")
-    cv2.imwrite(os.path.join(result_path, f"result_head.jpg"), img_vis)
+    (cx, cy), (diamX, diamY), rotation_deg = ellipse
+    cx = cx + best_box_coord[0]
+    cy = cy + best_box_coord[1]
+    ellipse = ((cx, cy), (diamX, diamY), rotation_deg)
+    
+    # 描画
+    # cv2.imwrite(os.path.join(result_path, f"result_head_crop.jpg"), img_vis)
+    best_frame_img = Image.fromarray(best_frame_img)
+    img_vis = Image.fromarray(img_vis)
+    best_frame_img.paste(img_vis, (int(best_box_coord[0]), int(best_box_coord[1])))
+    best_frame_img = np.array(best_frame_img)
+    cv2.rectangle(best_frame_img, (int(best_box_coord[0]), int(best_box_coord[1])), (int(best_box_coord[2]), int(best_box_coord[3])), (0, 255, 255), 2)
+    cv2.imwrite(os.path.join(result_path, f"result_head.jpg"), best_frame_img)
+    
+    # 切り抜く前の画像サイズで正規化（回転補正付き）
+    if normalize_ellipse:
+        (cx, cy), (diamX, diamY), rotation_deg = ellipse
+
+        # 回転角をラジアンへ変換
+        theta = np.deg2rad(rotation_deg)
+
+        # --- 横方向直径補正 ---
+        diamX_norm = diamX * np.sqrt((np.cos(theta) / w) ** 2 + (np.sin(theta) / h) ** 2)
+
+        # --- 縦方向直径補正（直交方向） ---
+        theta_y = theta + np.pi / 2.0
+        diamY_norm = diamY * np.sqrt((np.cos(theta_y) / w) ** 2 + (np.sin(theta_y) / h) ** 2)
+
+        # --- 中心座標も正規化 ---
+        cx_norm = cx / w
+        cy_norm = cy / h
+
+        ellipse = (
+            (cx_norm, cy_norm),
+            (diamX_norm / 2.0, diamY_norm / 2.0),  # 半径として格納
+            rotation_deg
+        )
     
     return {
         "frame_idx": best_frame_idx,
         "score": best_score,
         "ellipse": ellipse,
         "tilt_direction": tilt_direction,
-        "image": img_vis
+        "image": best_frame_img
     }
 
 # body
@@ -238,6 +288,7 @@ def measure_body(frames_bboxes,
     )
     if result is not None:
         cv2.imwrite(os.path.join(result_path, f"result_body.jpg"), result)
+    
     return {
         "frame_idx": best_frame_idx,
         "score": best_score,
@@ -287,7 +338,7 @@ def track_boxes_dp(
         )
         if traj:  # 空でなければ追加
             all_trajectories.extend(traj)
-    print("all_trajectories length", len(all_trajectories))
+    # print("all_trajectories length", len(all_trajectories))
     
     # 3. 軌跡を all_frame_preds に再編入
     for traj in all_trajectories:
@@ -312,9 +363,75 @@ def track_boxes_dp(
                     "logits": p_o["logits"],
                     "labels": 0  # 背景クラス扱い
                 })
+                break
             all_frame_preds[frame_idx] = new_preds
+        
+    # 5. 正規化された全長を計測
+    '''
+    femur_trajs = []
+    for traj in all_trajectories:
+        # 全ての経過点を格納
+        femur_traj = []
+        
+        # frame_idx でソート
+        traj.sort(key=lambda x: x[0])
+        
+        # 各フレームについて
+        for i, (frame_idx, bbox, logits) in enumerate(traj):
+            # 画像を取得
+            frame_path = ...
+            frame = cv2.imread(frane_path)
+            h, w, _ = frame.shape  # 正規化に用いる画像サイズ
+            
+            # BBox範囲を切り抜き
+            bbox_img = crop_image_with_margin(frame, bbox, w_margin_ratio=0.05, h_margin_ratio=0.05)
+            img_cp = cv2.cvtColor(bbox_img, cv2.COLOR_BGR2GRAY)
+            
+            # 二値化
+            _, filtered_mask = cv2.threshold(thresh, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # 面積最大の輪郭を抽出
+            contours, _ = cv2.findContours(filtered_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours_num = len(contours)
+            top_contours = sorted(contours, key=cv2.contourArea, reverse=True)[:min(combine_num, contours_num)]
+            combined_contour = np.vstack(top_contours)
+            
+            # 外接する回転矩形 -> 端点を取得
+            rect = cv2.minAreaRect(combined_contour)
+            # 矩形の中心位置を骨の通過点として取得
+            # frame 内での座標に変換し h, w を用いて正規化すること!
+            femur_point = ...
+            point.append((frame_idx, femur_point, logits))  # all_trajectories の形状にならいタプルで格納
+            
+            # 骨はBBoxの追跡方向に伸びていると想定
+            if i == 0 or i == len(traj):
+                # 矩形の短辺の中心位置を骨の端点とする
+                # frame 内での座標に変換し h, w を用いて正規化すること!
+                end_points = ...
+                
+                if i == 0:
+                    # bbox から traj[i+1] のBBoxへの移動方向と反対側にある端点 end_point をとる
+                    direction = ...
+                    end_point = ...
+                    
+                    # femur_traj 先頭に端点を追加
+                    femur_traj.insert(0, (frame_idx-1, femur_point, None))
+                else:
+                    # bbox から traj[i-1] のBBoxへの移動方向と反対側にある端点 end_point をとる
+                    direction = ...
+                    end_point = ...
+                    
+                    # femur_traj 最後尾に端点を追加
+                    femur_traj.append((frame_idx+1, femur_point, None))
     
-    # 5. 軌跡を描画して保存
+        # femur_traj を繋ぐ直線の距離を計算
+        femur_length = ...
+        
+        # 全体の結果に格納
+        femur_trajs.append(femur_traj)
+    '''
+    
+    # 6. 軌跡を描画して保存
     if result_path is not None:
         os.makedirs(result_path, exist_ok=True)
         draw_tracking_on_white_canvas(
@@ -323,5 +440,4 @@ def track_boxes_dp(
             save_dir=result_path
         )
 
-    return all_frame_preds
-
+    return all_frame_preds, all_trajectories

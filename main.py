@@ -1,4 +1,8 @@
-# Modified by Qianyu Zhou and Lu He
+# Modified by Kodaira Yuta
+# ------------------------------------------------------------------------
+# Modified from TransVOD
+# Copyright (c) 2022 Qianyu Zhou et al. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
 # ------------------------------------------------------------------------
 # Modified from Deformable DETR
 # Copyright (c) 2020 SenseTime. All Rights Reserved.
@@ -6,7 +10,6 @@
 # ------------------------------------------------------------------------
 # Modified from DETR (https://github.com/facebookresearch/detr)
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-# ------------------------------------------------------------------------
 
 
 import argparse
@@ -140,6 +143,7 @@ def get_args_parser():
 
 
 def main(args, opt, debugmode=False):
+    print(args.dataset_file, 11111111)
     if args.dataset_file == "coco":
         from engine_single import evaluate, train_one_epoch
         import util.misc as utils
@@ -431,10 +435,10 @@ def main(args, opt, debugmode=False):
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     
-    DET_opt = ['6',                 # 訓練データディレクトリのルート番号 (Data_{} の{}内)
-               'Data_femur_251016',    # 訓練データディレクトリ名 (上で指定したディレクトリ下がすぐにDETなら '' とする)
-               'femur_251016',         # アノテーションJSONのオプション名 (anno_{}.json の{}内)
-               'femur_5_raw',         # 検証アノテーションJSONのオプション名 (anno_{}_val.json の{}内)
+    DET_opt = ['hbl',                 # 訓練データディレクトリのルート番号 (Data_{} の{}内)
+               'Data_hbl_251101',    # 訓練データディレクトリ名 (上で指定したディレクトリ下がすぐにDETなら '' とする)
+               'hbl_251101',         # アノテーションJSONのオプション名 (anno_{}.json の{}内)
+               'hbl_250805',         # 検証アノテーションJSONのオプション名 (anno_{}_val.json の{}内)
                'BLANK',              # 拡張用
                ]
     print(f"DET option is {DET_opt}")

@@ -1,11 +1,15 @@
+# Modified by Kodaira Yuta
 # ------------------------------------------------------------------------
-# Deformable DETR
+# Modified from TransVOD
+# Copyright (c) 2022 Qianyu Zhou et al. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
+# ------------------------------------------------------------------------
+# Modified from Deformable DETR
 # Copyright (c) 2020 SenseTime. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 [see LICENSE for details]
 # ------------------------------------------------------------------------
 # Modified from DETR (https://github.com/facebookresearch/detr)
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-# ------------------------------------------------------------------------
 
 import torch.utils.data
 from .torchvision_datasets import CocoDetection
@@ -43,7 +47,7 @@ def build_dataset(image_set, args, opt, debugmode=False):
     if args.dataset_file == 'vid_single':
         return build_vid_single(image_set, args)
     if args.dataset_file == "vid_multi":
-        return build_vid_multi(image_set, args, opt, debugmode=debugmode)
+        return build_vid_multi(image_set, args, opt, debugmode=debugmode)  # 0508_5 ここでビルド方法を指定 次：datasets/vid_multi.py
     if args.dataset_file == "vid_multi_eval":
         return build_vid_multi_eval(image_set, args)
     raise ValueError(f'dataset {args.dataset_file} not supported')
