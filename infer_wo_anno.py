@@ -395,7 +395,7 @@ def main(args, opt):
         print("Processing:", video_name)
         all_frame_preds_o = evaluate_whole_video_custom(
             vid_path=video_path, 
-            result_path=f'{output_dir_path}/{video_name}', 
+            result_path=f'{output_dir_path}/{video_name}/frames', 
             model=model, 
             device=device, 
             num_frames=args.num_frames, 
