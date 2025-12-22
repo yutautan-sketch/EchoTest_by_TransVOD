@@ -93,18 +93,19 @@ EchoTest_by_TransVOD/
 ```
 
 3.\
-FLのみを測定する場合は`ezinf_femur.sh`を、BPD/AC/FLを測定する場合は`ezinf_hbl`を実行\
-実行すると以下のように：\
+FLのみを測定する場合は`ezinf_femur.sh`を、BPD/AC/FLを測定する場合は`ezinf_hbl`を実行します\
+実行すると、以下のように：\
 A. 検出する最低確率（その物体がBPD/AC/FLである確率がAIにとって何パーセント以上の時に採用するか）\
 B. 動画の横幅（mm単位）\
 C. 動画の高さ（mm単位）\
 D. 1度にAIが検出結果を出力するフレームの数（1~12の整数。小さいほど1枚のフレームを何度も確認するため検出が遅くなり、大きいほど速度が上がります）\
-について聞かれるので、数値を入力してエンターキーを押します（または何も入力せずにエンターキーを押すことで、デフォルトの値で検出を行います）\
+について聞かれるので、数値を入力してエンターキーを押します\
+（または何も入力せずにエンターキーを押すことで、デフォルトの値で検出を行います）\
 ```
 Enter Probability Threshold[%] (or press Enter to use default 50.0%):   # A. 検出する最低確率 デフォルトは50%
 Enter Image Scale Width[mm] (or press Enter to use default 200mm):      # B. 動画の横幅 デフォルトは200mm
 Enter Image Scale Height[mm] (or press Enter to use default 200mm):     # C. 動画の高さ デフォルトは200mm
-Enter Number of Frames to Process at Once (or press Enter to use default 1) between 1~12:  # D. 1度にAIが検出結果を出力するフレームの数
+Enter Number of Frames to Process at Once (or press Enter to use default 1) between 1~12:  # D. 1度にAIが検出結果を出力するフレームの数 デフォルトは1
 ```
 
 4.\
