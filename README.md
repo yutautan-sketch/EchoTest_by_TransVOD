@@ -41,7 +41,7 @@ limitations under the License.
 また、CPU/GPU環境の違いによって挙動に差異が発生する可能性があります。
 
 ### 環境:
-CUDA >= 1.18 (学習時はCUDA必須)\
+CUDA >= 11.8 (学習時はCUDA必須)\
 python >= 3.7 (3.8以上を推奨)\
 PyTorch >= 2.1.2, torchvision >= 0.16.2
 ```
