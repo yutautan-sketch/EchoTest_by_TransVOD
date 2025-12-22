@@ -65,7 +65,7 @@ python setup.py build develop --user
 EchoTest_by_TransVOD/
 ├── results/
 │   └── transvod/
-│       └── hbl_251101/
+│       ├── hbl_251101/
 │       │   └── hbl_251101_mm=0.7_topk=3_boxes=gt/
 │       │       └── checkpoint0049.pth
 │       │       └── transformer_config.txt
