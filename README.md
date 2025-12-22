@@ -93,7 +93,11 @@ EchoTest_by_TransVOD/
 ```
 
 3.\
-FLのみを測定する場合は`ezinf_femur.sh`を、BPD/AC/FLを測定する場合は`ezinf_hbl`を実行します\
+FLのみを測定する場合は`ezinf_femur.sh`を、BPD/AC/FLを測定する場合は`ezinf_hbl.sh`を実行します\
+```
+# コマンドラインに以下を入力し、エンターキーで実行
+bash ezinf_hbl.sh  # または bash ezinf_femur.sh
+```
 実行すると、以下のように：\
 A. 検出する最低確率（その物体がBPD/AC/FLである確率がAIにとって何パーセント以上の時に採用するか）\
 B. 動画の横幅（mm単位）\
