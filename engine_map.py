@@ -369,7 +369,9 @@ def evaluate_with_map(model, data_loader, device,
             # 各クエリの最大スコアラベルを取得
             # ただしスコアが閾値以下のクエリのクラスは背景(0)にする
             # NOTE スコアではなくsoftmaxで閾値処理する方法も検討
-            scores, pred_labels = pred_logits.max(-1)
+            # scores, pred_labels = pred_logits.max(-1)
+            scores, pred_labels = pred_logits[:, 1:].max(-1)  # クラス1以降から最大を取得
+            pred_labels = pred_labels + 1  # インデックスをクラス番号にシフト
             pred_labels[scores < score_threshold] = 0
             
             # --- 予測を蓄積 ---
@@ -407,13 +409,14 @@ def evaluate_with_map(model, data_loader, device,
         
         # 追跡処理
         all_frame_preds, _ = track_boxes_dp(
+            vid_path=None,
             frames_bboxes=frames_bboxes,
             all_frame_preds=all_frame_preds,
             all_frame_preds_o=all_frame_preds_o,
             track_label_num=track_label_num,
             max_skip=3,
             device=device,
-            #result_path=result_path
+            result_path=None
         )
     else:
         print("===== NO TRACKING =====")

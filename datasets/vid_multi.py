@@ -81,40 +81,40 @@ class CocoDetection(TvCocoDetection):
         else:
             img_ids = self.cocovid.get_img_ids_from_vid(video_id) 
             ref_img_ids = []
-            if self.is_train:
-                # Get the base left and right bounds
-                interval = int((self.num_ref_frames+1)/2)
-                left = max(img_ids[0], img_id - interval)
-                right = min(img_ids[-1]+1, img_id + interval)
+            # if self.is_train:
+            # Get the base left and right bounds
+            interval = int((self.num_ref_frames+1)/2)
+            left = max(img_ids[0], img_id - interval)
+            right = min(img_ids[-1]+1, img_id + interval)
+            
+            # If it's too close to the left edge (first frame) → Extend right
+            left_offset = img_id - left
+            if left_offset < interval:
+                right += (interval - left_offset)
+                right = min(right, img_ids[-1]+1)
+            else:
+                # If it's too close to the right edge (last frame) → Extend left
+                right_offset = right - img_id
+                if right_offset < interval:
+                    left -= (interval - right_offset)
+                    left = max(left, img_ids[0])
+            sample_range = list(range(left, right))
+            
+            # NOTE Exclude Center Frame, basically False
+            if self.filter_key_img and img_id in sample_range:
+                sample_range.remove(img_id)
+            
+            # If interval * 2 or more, randomly select from all frames
+            if self.num_ref_frames >= (interval*2):
+                sample_range = img_ids
                 
-                # If it's too close to the left edge (first frame) → Extend right
-                left_offset = img_id - left
-                if left_offset < interval:
-                    right += (interval - left_offset)
-                    right = min(right, img_ids[-1]+1)
-                else:
-                    # If it's too close to the right edge (last frame) → Extend left
-                    right_offset = right - img_id
-                    if right_offset < interval:
-                        left -= (interval - right_offset)
-                        left = max(left, img_ids[0])
-                sample_range = list(range(left, right))
-                
-                # NOTE Exclude Center Frame, basically False
-                if self.filter_key_img and img_id in sample_range:
-                    sample_range.remove(img_id)
-                
-                # If interval * 2 or more, randomly select from all frames
-                if self.num_ref_frames >= (interval*2):
-                    sample_range = img_ids
-                    
-                # Repeat when there are not enough frames
-                while self.num_ref_frames > len(sample_range):
-                    sample_range.extend(sample_range)
+            # Repeat when there are not enough frames
+            while self.num_ref_frames > len(sample_range):
+                sample_range.extend(sample_range)
 
-                # Random reference frame selection
-                ref_img_ids = random.sample(sample_range, self.num_ref_frames)
-
+            # Random reference frame selection
+            ref_img_ids = random.sample(sample_range, self.num_ref_frames)
+            '''
             else:
                 #print("------------------------------")i
                 ref_img_ids = []
@@ -128,8 +128,8 @@ class CocoDetection(TvCocoDetection):
                 else:
                    for i in range(self.num_ref_frames):
                        ref_img_ids.append(max(img_id - (i+1)*interval, img_ids[0]))
-
-                # print("ref_img_ids", ref_img_ids)
+            '''
+            
             for ref_img_id in ref_img_ids:
                 ref_ann_ids = coco.getAnnIds(imgIds=ref_img_id)
                 ref_img_info = coco.loadImgs(ref_img_id)[0]

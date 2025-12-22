@@ -48,8 +48,12 @@
 # 分散学習 : torchrun  --nproc_per_node=2 main.py\
 # 1GPUでの学習 : python main.py\
 
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUM_WORKERS=2  # PyTorch DataLoader用（コア数に応じて調整）
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 python main.py\
-     --resume exps/COCO_general_model/swins_checkpoint0049.pth\
+     --resume results/transvod/251216/hbl_251217_mm=0.0_topk=3_boxes=gt/checkpoint0024.pth\
      --backbone swin_s_p4w7\
      --batch_size=1\
      --num_feature_levels 1\
@@ -58,7 +62,7 @@ python main.py\
      --with_box_refine\
      --dilation\
      --focal_alpha 0.75\
-     --output_dir results/transvod/251021/femur_251016_mm=0.7_topk=3_boxes=gt\
+     --output_dir results/transvod/251219/hbl_251216_finetune_mm=0.0_topk=3_boxes=gt\
      --dataset_file vid_multi\
      --vid_path ./data/vid\
      --epochs 50\

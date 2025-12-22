@@ -18,7 +18,7 @@
 # 推論結果の画像を取得 -> "/frame"をoutput_dirの最後に追加 (val_topk=30 との順番はどちらでもOK)
 
 python eval_videos.py\
-     --resume results/transvod/251025/hbl_251017_mm=0.7_topk=3_boxes=gt/checkpoint0049.pth\
+     --resume results/transvod/251130/femur_251128_mm=0.0_topk=3_boxes=gt/checkpoint0049.pth\
      --backbone swin_s_p4w7\
      --batch_size=1\
      --num_feature_levels 1\
@@ -26,9 +26,8 @@ python eval_videos.py\
      --num_frames 12\
      --with_box_refine\
      --dilation\
-     --output_dir results/without_anno/score=0.0_giou=0.0/frame\
+     --output_dir results/251220/femur_251126_mini_val/score=0.0_giou=0.0/femur_251128_mm=0.0_topk=3_boxes=gt/frame\
      --dataset_file vid_multi\
      --vid_path ./data/vid\
      --enc_layers 3\
-     --dec_layers 3\
-     --eval
+     --dec_layers 3

@@ -24,6 +24,9 @@ from torch.nn.init import xavier_uniform_, constant_, uniform_, normal_
 from util.misc import inverse_sigmoid
 from models.ops.modules import MSDeformAttn
 
+import numpy as np
+from .update_qfh import update_QFH_with_giou
+
 
 class DeformableTransformer(nn.Module):
     def __init__(self, d_model=256, nhead=8,
@@ -31,7 +34,8 @@ class DeformableTransformer(nn.Module):
                  activation="relu", return_intermediate_dec=False,
                  num_feature_levels=4, dec_n_points=4,  enc_n_points=4,
                  two_stage=False, two_stage_num_proposals=300, n_temporal_decoder_layers=1,
-                 num_frames=3, fixed_pretrained_model=False, args=None, debugmode=False):
+                 num_frames=3, fixed_pretrained_model=False, 
+                 temp_pos_enc=None, qfh='qfh', device='cuda', debugmode=False):
         super().__init__()
 
         self.d_model = d_model
@@ -42,6 +46,27 @@ class DeformableTransformer(nn.Module):
         self.fixed_pretrained_model = fixed_pretrained_model
         self.n_temporal_query_layers = 3
         self.debugmode = debugmode
+        self.collect_token_stats = False
+        
+        if temp_pos_enc is not None:
+            from .position_encoding import build_frame_position_encoding
+            if temp_pos_enc == 'sinusoidal':
+                num_que_list = [9, 6, 3]
+                self.temp_pos_enc = [
+                    build_frame_position_encoding(num_frames, num_query, d_model, torch.device(device))
+                    for num_query in num_que_list
+                ]
+            else:
+                raise ValueError("Unknown temp_pos_enc in deformable_transformer_multi.py")
+            if self.debugmode:
+                print("\nself.temp_pos_enc[2]", self.temp_pos_enc[2].shape)
+                for i in range(self.temp_pos_enc[2].shape[1]):
+                    print(self.temp_pos_enc[2][0][i][0].item(), self.temp_pos_enc[2][0][i][1].item(), "...", self.temp_pos_enc[2][0][i][-2].item(), self.temp_pos_enc[2][0][i][-1].item())
+        else:
+            self.temp_pos_enc = [None, None, None]
+            
+        
+        self.qfh = qfh
 
         encoder_layer = DeformableTransformerEncoderLayer(d_model, dim_feedforward,
                                                           dropout, activation,
@@ -167,6 +192,13 @@ class DeformableTransformer(nn.Module):
                 last_topk=30, 
                 ):
         assert self.two_stage or query_embed is not None
+        
+        # Token statistics collection
+        if hasattr(self, "collect_token_stats") and self.collect_token_stats:
+            token_stats = {
+                "encoder": [],
+                "decoder": []
+            }
 
         # prepare input for encoder
         src_flatten = []
@@ -202,6 +234,21 @@ class DeformableTransformer(nn.Module):
         
         # encoder: Memory Clip
         memory = self.encoder(src_flatten, spatial_shapes, level_start_index, valid_ratios, lvl_pos_embed_flatten, mask_flatten)
+        if hasattr(self, "collect_token_stats") and self.collect_token_stats:
+            with torch.no_grad():
+                # memory: [bs, HW, C]
+                mem_norm = torch.norm(memory, dim=-1)  # [bs, HW]
+
+                for b in range(mem_norm.shape[0]):
+                    vals = mem_norm[b].detach().cpu().numpy()
+                    token_stats["encoder"].append({
+                        "frame_idx": b,
+                        "mean": float(np.mean(vals)),
+                        "std": float(np.std(vals)),
+                        "p5": float(np.percentile(vals, 5)),
+                        "p50": float(np.percentile(vals, 50)),
+                        "p95": float(np.percentile(vals, 95))
+                    })
 
         if self.debugmode:
             checkpoint_ste = time.perf_counter()
@@ -211,6 +258,7 @@ class DeformableTransformer(nn.Module):
         
         # prepare input for decoder
         bs, _, c = memory.shape
+        
         if self.two_stage:
             output_memory, output_proposals = self.gen_encoder_output_proposals(memory, mask_flatten, spatial_shapes)
 
@@ -241,6 +289,21 @@ class DeformableTransformer(nn.Module):
         # decoder: Query Clip
         hs, inter_references = self.decoder(tgt, reference_points, memory,
                                             spatial_shapes, level_start_index, valid_ratios, query_embed, mask_flatten)
+        if hasattr(self, "collect_token_stats") and self.collect_token_stats:
+            with torch.no_grad():
+                final_hs = hs[-1]  # [bs, num_queries, C]
+                dec_norm = torch.norm(final_hs, dim=-1)  # [bs, num_queries]
+
+                for b in range(dec_norm.shape[0]):
+                    vals = dec_norm[b].detach().cpu().numpy()
+                    token_stats["decoder"].append({
+                        "frame_idx": b,
+                        "mean": float(np.mean(vals)),
+                        "std": float(np.std(vals)),
+                        "p5": float(np.percentile(vals, 5)),
+                        "p50": float(np.percentile(vals, 50)),
+                        "p95": float(np.percentile(vals, 95))
+                    })
         
         inter_references_out = inter_references
         
@@ -264,28 +327,25 @@ class DeformableTransformer(nn.Module):
             out = {}
             last_reference_out = inter_references_out[-1]  # Location reference from STD: [bs, num_queries, 4]
             last_hs = hs[-1]  # final output of STD: [bs, num_queries, d_model]
-            # QFH_1(Query Clip)
-            new_hs, last_reference_out = update_QFH(class_embed, last_hs, last_reference_out, 9)  # [bs, num_queries, d_model] -> [bs, 80, d_model] # HACK 80 can be replaced to the other num
-            # print(f"new_hs: {new_hs.shape} | last_reference_out: {last_reference_out.shape}")
-            new_hs_list = torch.chunk(new_hs, self.num_frames, dim = 0)  # list: [1, 80, d_model] * bs
-            # print(f"new_hs_list: {len(new_hs_list)} consists of {new_hs_list[-1].shape}")
-            new_hs = torch.cat(new_hs_list, 1)  # [1, bs * 80, d_model]
-            # print(f"new_hs: {new_hs.shape}")
+            
+            # QFH_1(Query Clip): [bs, num_queries, d_model] -> [bs, 9, d_model] HACK 9 can be replaced to the other num
+            new_hs, last_reference_out = update_QFH(class_embed, last_hs, last_reference_out, 9)
+            new_hs_list = torch.chunk(new_hs, self.num_frames, dim = 0)  # list: [1, 9, d_model] * bs
+            new_hs = torch.cat(new_hs_list, 1)  # [1, bs * 9, d_model]
+            
             # TQE_1(Query Clip)
-            new_hs = self.temporal_query_layer1(new_hs, new_hs)  # [1, bs * 80, d_model]
-            # print(f"new_hs: {new_hs.shape}")
+            new_hs = self.temporal_query_layer1(new_hs, new_hs, self.temp_pos_enc[0], self.temp_pos_enc[0])  # [1, bs * 9, d_model]
             new_hs_list = torch.chunk(new_hs, self.num_frames , dim = 1)
-            new_hs = torch.cat(new_hs_list , 0)  # [bs, 80, d_model]
-            # print(f"new_hs: {new_hs.shape}")
+            new_hs = torch.cat(new_hs_list , 0)  # [bs, 9, d_model]
+            
             # TDTD_1(Query Clip, Memory Clip): new_hs = new Query Clip (Query Clip')
             new_hs, last_references_out = self.temporal_decoder1(new_hs, last_reference_out, memory,
                                                                  spatial_shapes, level_start_index, valid_ratios, None, None)
-            # print(f"new_hs: {new_hs.shape} | last_reference_out: {last_reference_out.shape}")
             
             # Pass FFN to get and store TDTD_1 outputs
-            reference1 = inverse_sigmoid(last_references_out)  # [bs, 80, 4]
-            output_class1 = temp_class_embed_list[0](new_hs)  # nn.Linear(d_model, num_classes): [bs, 80, d_model] -> [bs, 80, num_classes]
-            tmp1 = temp_bbox_embed_list[0](new_hs)  # 3_layers_MLP(d_model->d_model, d_model->d_model, d_model->4): [bs, 80, d_model] -> [bs, 80, 4]
+            reference1 = inverse_sigmoid(last_references_out)  # [bs, 9, 4]
+            output_class1 = temp_class_embed_list[0](new_hs)  # nn.Linear(d_model, num_classes): [bs, 9, d_model] -> [bs, 9, num_classes]
+            tmp1 = temp_bbox_embed_list[0](new_hs)  # 3_layers_MLP(d_model->d_model, d_model->d_model, d_model->4): [bs, 9, d_model] -> [bs, 9, 4]
             if reference1.shape[-1] == 4:
                 tmp1 += reference1
             else:
@@ -293,24 +353,36 @@ class DeformableTransformer(nn.Module):
                 tmp1[..., :2] += reference1
             output_coord1 = tmp1.sigmoid()
             out['aux_outputs'] = [{"pred_logits":output_class1, "pred_boxes":output_coord1}]
-            # loss: new_hs [bs, 80, d_model]
+            # loss: new_hs [bs, 9, d_model]
             
-            # QFH_2(Query Clip')
-            new_hs, last_reference_out = update_QFH(temp_class_embed_list[0], new_hs, last_reference_out, 6)  # [bs, 80, d_model] -> [bs, 50, d_model] # HACK 50 can be replaced to the other num
+            # QFH_2(Query Clip'): [bs, 9, d_model] -> [bs, 6, d_model] HACK 6 can be replaced to the other num
+            if self.qfh == 'qfh':
+                new_hs, last_reference_out = update_QFH(temp_class_embed_list[0], new_hs, last_reference_out, 6)
+            elif self.qfh == 'with_giou':
+                new_hs, last_reference_out = update_QFH_with_giou(
+                    class_embed=temp_class_embed_list[0],
+                    hs=new_hs,
+                    last_reference_out=last_reference_out,
+                    hs_coords=output_coord1,
+                    topk=6,
+                    debugmode=self.debugmode
+                )
             new_hs_list = torch.chunk(new_hs, self.num_frames, dim = 0)
-            new_hs = torch.cat(new_hs_list, 1)  # [1, bs * 50, d_model]
+            new_hs = torch.cat(new_hs_list, 1)  # [1, bs * 6, d_model]
+            
             # TQE_2(Query Clip')
-            new_hs = self.temporal_query_layer2(new_hs, new_hs)  # [1, bs * 50, d_model]
+            new_hs = self.temporal_query_layer2(new_hs, new_hs, self.temp_pos_enc[1], self.temp_pos_enc[1])  # [1, bs * 6, d_model]
             new_hs_list = torch.chunk(new_hs, self.num_frames , dim = 1)
-            new_hs = torch.cat(new_hs_list , 0)  # [bs, 50, d_model]
+            new_hs = torch.cat(new_hs_list , 0)  # [bs, 6, d_model]
+            
             # TDTD_2(Query Clip', Memory Clip): new_hs = new Query Clip (Query Clip'')
             new_hs, last_references_out = self.temporal_decoder2(new_hs, last_reference_out, memory,
                                                                 spatial_shapes, level_start_index, valid_ratios, None, None)
             
             # Pass FFN to get and store TDTD_2 outputs
-            reference2 = inverse_sigmoid(last_references_out)  # [bs, 50, 4]
-            output_class2 = temp_class_embed_list[1](new_hs)  # nn.Linear(d_model, num_classes): [bs, 50, d_model] -> [bs, 50, num_classes]
-            tmp2 = temp_bbox_embed_list[1](new_hs)  # 3_layers_MLP(d_model->d_model, d_model->d_model, d_model->4): [bs, 50, d_model] -> [bs, 50, 4]
+            reference2 = inverse_sigmoid(last_references_out)  # [bs, 6, 4]
+            output_class2 = temp_class_embed_list[1](new_hs)  # nn.Linear(d_model, num_classes): [bs, 6, d_model] -> [bs, 6, num_classes]
+            tmp2 = temp_bbox_embed_list[1](new_hs)  # 3_layers_MLP(d_model->d_model, d_model->d_model, d_model->4): [bs, 6, d_model] -> [bs, 6, 4]
             if reference2.shape[-1] == 4:
                 tmp2 += reference2
             else:
@@ -318,16 +390,28 @@ class DeformableTransformer(nn.Module):
                 tmp2[..., :2] += reference2
             output_coord2 = tmp2.sigmoid()
             out['aux_outputs'].append({"pred_logits":output_class2, "pred_boxes":output_coord2})
-            # loss: [bs, 50, d_model]
+            # loss: [bs, 6, d_model]
 
             # QFH_3(Query Clip'')
-            new_hs, last_reference_out = update_QFH(temp_class_embed_list[1], new_hs, last_reference_out, last_topk)  # [bs, 50, d_model] -> [bs, last_topk, d_model]
+            if self.qfh == 'qfh':
+                new_hs, last_reference_out = update_QFH(temp_class_embed_list[1], new_hs, last_reference_out, last_topk)  # [bs, 6, d_model] -> [bs, last_topk, d_model]
+            elif self.qfh == 'with_giou':
+                new_hs, last_reference_out = update_QFH_with_giou(
+                    class_embed=temp_class_embed_list[1],
+                    hs=new_hs,
+                    last_reference_out=last_reference_out,
+                    hs_coords=output_coord2,
+                    topk=last_topk,
+                    debugmode=self.debugmode
+                )
             new_hs_list = torch.chunk(new_hs, self.num_frames, dim = 0)
             new_hs = torch.cat(new_hs_list, 1)  # [1, bs * last_topk, d_model]
+            
             # TQE_3(Query Clip'')
-            new_hs = self.temporal_query_layer3(new_hs, new_hs)  # [1, bs * last_topk, d_model]
+            new_hs = self.temporal_query_layer3(new_hs, new_hs, self.temp_pos_enc[2], self.temp_pos_enc[2])  # [1, bs * last_topk, d_model]
             new_hs_list = torch.chunk(new_hs, self.num_frames , dim = 1)
             new_hs = torch.cat(new_hs_list , 0)  # [bs, last_topk, d_model]
+            
             # TDTD_3(Query Clip'', Memory Clip)
             final_hs, final_references_out = self.temporal_decoder3(new_hs, last_reference_out, memory,
                                             spatial_shapes, level_start_index, valid_ratios, None, None)
@@ -336,6 +420,9 @@ class DeformableTransformer(nn.Module):
             if self.debugmode:
                 checkpoint_seqhqm = time.perf_counter()
                 print(f"\n=== Passed SeqHQM: {checkpoint_seqhqm-checkpoint_std:.2f}s ===")
+            
+            if hasattr(self, "collect_token_stats") and self.collect_token_stats:
+                self.latest_token_stats = token_stats
             
             # Return final_hs: [bs, last_topk, d_model], final_references_out: [bs, last_topk, 4] as outputs of SeqHQM
             return hs, init_reference_out, inter_references_out, None, None, final_hs, final_references_out, out
@@ -347,7 +434,8 @@ def update_QFH(class_embed, hs, last_reference_out, topk):
     num_frames, num_queries, _ = hs.shape  # hs.shape = torch.Size([num_frames, num_queries, d_model])
     hs_logits = class_embed(hs)  # nn.Linear(d_model, num_classes): [num_frames, num_queries, d_model] -> [num_frames, num_queries, num_classes]
     prob = hs_logits.sigmoid()  # Get probability: [num_frames, num_queries, num_classes]
-    prob = torch.max(prob, dim = -1)  # torch.return_types.max(tensor[num_frames, num_queries], tensor[num_frames, num_queries])
+    # prob = torch.max(prob, dim = -1)  # torch.return_types.max(tensor[num_frames, num_queries], tensor[num_frames, num_queries])
+    prob = torch.max(prob[:, :, 1:], dim = -1)  # (max_prob, max_prob_class_idx: except class 0)
 
     topk = min(topk, num_queries)  # topk must be <= num_queries
 
@@ -736,6 +824,8 @@ def _get_activation_fn(activation):
 
 
 def build_deforamble_transformer(args, debugmode=False):
+    if debugmode:
+        print(f"num_classes: {args.num_classes}, position_encoding: {args.position_encoding}, qfh: {args.qfh}")
     return DeformableTransformer(
         d_model=args.hidden_dim,
         nhead=args.nheads,
@@ -750,10 +840,10 @@ def build_deforamble_transformer(args, debugmode=False):
         enc_n_points=args.enc_n_points,
         two_stage=args.two_stage,
         two_stage_num_proposals=args.num_queries,
-        n_temporal_decoder_layers = args.n_temporal_decoder_layers, 
-        num_frames = args.num_frames,
-        fixed_pretrained_model = args.fixed_pretrained_model,
-        args = args, 
+        n_temporal_decoder_layers=args.n_temporal_decoder_layers, 
+        num_frames=args.num_frames,
+        fixed_pretrained_model=args.fixed_pretrained_model,
+        temp_pos_enc=args.position_encoding,  # 'sinusoidal' or None
+        qfh=args.qfh,  # 'with_giou' or 'qfh'
+        device=args.device, 
         debugmode=debugmode)
-
-

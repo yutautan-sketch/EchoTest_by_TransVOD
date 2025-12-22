@@ -1,6 +1,17 @@
 import cv2
+import math
 import numpy as np
 import matplotlib.pyplot as plt
+
+# 楕円の近似周囲長（Ramanujan 第2式） from https://arxiv.org/pdf/math/0506384
+# radii = (rad_x, rad_y)
+def ellipse_perimeter(radii):
+    print(radii)
+    a, b = radii
+    h = ((a - b) ** 2) / ((a + b) ** 2)
+    # Ramanujan approximation
+    perimeter = math.pi * (a + b) * (1 + (3 * h) / (10 + math.sqrt(4 - 3 * h)))
+    return perimeter
 
 def sample_contour_points(
     img, combined_contour, ellipse, 
@@ -113,7 +124,6 @@ def body_detect(img,
     cv2.ellipse(mask_img, (center, (axes[0]*2, axes[1]*2), 0), (255, 0, 0), thickness=1)
     
     # ---- 3.1 楕円フィッティング ----
-    # TODO 単純な一回フィッティングではなく、HeadTiltDetector の構造を真似て盤石な処理にする
     attempt = 0
     contours, _ = cv2.findContours(filtered_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours_num = len(contours)
@@ -126,23 +136,28 @@ def body_detect(img,
             final_contour = sample_contour_points(img_cp, combined_contour, ellipse)
             if final_contour is not None:
                 hull = cv2.convexHull(final_contour)
-                elli_filtered = cv2.fitEllipse(hull)
-                if elli_filtered is not None:
-                    center, axes, angle = ellipse
-                    if all([
-                        # 楕円の中心が画像の中心から大きくずれていない
-                        abs(center[0] - w / 2) < w * 0.2,
-                        abs(center[1] - h / 2) < h * 0.2,
-                        # 楕円にフィットする矩形範囲が画像の面積に対して小さすぎない
-                        (max(axes) * min(axes)) / (w * h) >= 0.65,
-                    ]):
-                        if debugmode > 0:
-                            cv2.drawContours(img_cp, top_contours, -1, (0, 0, 255), 2)
-                            cv2.ellipse(img_cp, ellipse, (0, 255, 0), 2)
-                            cv2.drawContours(img_cp, [final_contour], -1, (255, 0, 255), 2)
-                        cv2.ellipse(img_cp, elli_filtered, (0, 255, 255), 2)
-                        best_ellipse = (center, axes, angle)
-                        break
+                if hull is not None and len(hull) >= 5:
+                    elli_filtered = cv2.fitEllipse(hull)
+                    if elli_filtered is not None:
+                        center, axes, angle = elli_filtered
+                        if all([
+                            # 楕円の中心が画像の中心から大きくずれていない
+                            abs(center[0] - w / 2) < w * 0.05,
+                            abs(center[1] - h / 2) < h * 0.05,
+                            # 楕円にフィットする矩形範囲が画像の面積に対して小さすぎない
+                            (math.pi * max(axes) * min(axes)) / (w * h) >= 0.65,
+                        ]):
+                            if debugmode > 0:
+                                cv2.drawContours(img_cp, top_contours, -1, (0, 0, 255), 2)
+                                cv2.ellipse(img_cp, ellipse, (0, 255, 0), 2)
+                                cv2.drawContours(img_cp, [final_contour], -1, (255, 0, 255), 2)
+                            
+                            # NOTE 楕円の長半径を半径に持つ円に変換 (精度が上昇するか一時的に試験中)
+                            elli_filtered = (center, (max(axes), max(axes)), angle)
+                            
+                            cv2.ellipse(img_cp, elli_filtered, (0, 255, 255), 2)
+                            best_ellipse = (center, (axes[0]/2, axes[1]/2), angle)
+                            break
         
         combine_num += 1
         attempt += 1
@@ -150,7 +165,7 @@ def body_detect(img,
             print(f"combine_num -> {combine_num}")
             print(f"1: {abs(center[0] - w / 2)} < {w * 0.2}")
             print(f"2: {abs(center[1] - h / 2)} < {h * 0.2}")
-            print(f"3: {(max(axes) * min(axes)) / (w * h)} >= 0.63")
+            print(f"3: {(math.pi * max(axes) * min(axes)) / (w * h)} >= 0.63")
     
     # ---- 3.2 円フィッティング(Hough) ----
     circles = cv2.HoughCircles(
@@ -163,24 +178,24 @@ def body_detect(img,
         minRadius=0,
         maxRadius=max(int(h/2), int(w/2))
     )
-    cv2.imwrite('clahe_mask.jpg', clahe_mask)
-    cv2.imwrite('clsb_mask.jpg', clsb_mask)
-    cv2.imwrite('filtered_mask.jpg', filtered_mask)
+    if debugmode > 0:
+        cv2.imwrite('clahe_mask.jpg', clahe_mask)
+        cv2.imwrite('clsb_mask.jpg', clsb_mask)
+        cv2.imwrite('filtered_mask.jpg', filtered_mask)
     if circles is not None:
         circles = np.round(circles[0, :]).astype("int")
         for x, y, r in circles:
             if all([
                 # 楕円の中心が画像の中心から大きくずれていない
-                abs(x - w / 2) < w * 0.2,
-                abs(y - h / 2) < h * 0.2,
+                abs(x - w / 2) < w * 0.15,
+                abs(y - h / 2) < h * 0.15,
                 # 楕円にフィットする矩形範囲が画像の面積に対して小さすぎない
-                (4 * r * r) / (w * h) >= 0.63,
+                (math.pi * r * r) / (w * h) >= 0.6,
             ]):
-                # TODO (x, y) が画像中心 (w/2, h/2) 付近でないなら除外する
                 cv2.circle(img_cp, (x, y), r, (255, 255, 0), 2)
                 cv2.circle(img_cp, (x, y), 2, (0, 0, 255), 3)
-                print(f"腹部測定結果: ({x}, {y}), 半径={r}")
-                best_circle = (x, y, r)
+                # print(f"腹部測定結果: ({x}, {y}), 半径={r}")
+                best_circle = ((x, y), (r, r), 0.0)  # 楕円と型式を統一
                 break
         return img_cp, best_ellipse, best_circle
     else:

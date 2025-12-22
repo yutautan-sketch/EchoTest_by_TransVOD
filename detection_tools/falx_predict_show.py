@@ -521,7 +521,7 @@ class HeadTiltDetector:
                         # 楕円にフィットする矩形範囲が画像の面積に対して小さすぎる
                         (max(axes) * min(axes)) / (img_w * img_h) < 0.7,
                         ]): 
-                        print(f"redo: {max(axes) / min(axes)} | {np.linalg.norm(elli_center - img_center)} | {(max(axes) * min(axes)) / (img_w * img_h)}")
+                        # print(f"redo: {max(axes) / min(axes)} | {np.linalg.norm(elli_center - img_center)} | {(max(axes) * min(axes)) / (img_w * img_h)}")
                         if self.combine_num < contours_num:
                             self.combine_num += 1  # 他の輪郭を取り入れる
                         else: 
@@ -530,7 +530,7 @@ class HeadTiltDetector:
                         attempt += 1
                         continue
                 else:
-                    print(f"redo: {(ellipse_area - inside_area) / ellipse_area}")
+                    # print(f"redo: {(ellipse_area - inside_area) / ellipse_area}")
                     increased_thresh += 5
                     attempt += 1
                     continue
@@ -546,14 +546,14 @@ class HeadTiltDetector:
                         if debugmode==2: 
                             cv2.drawContours(self.img, [final_contour], -1, (255, 0, 255), 2)
                             cv2.imwrite("Head_Tilt_Detection.jpg", self.img)
-                            # input("Push any key to continue...")
                         hull = cv2.convexHull(final_contour)
-                        ellipse = self.fit_ellipse(hull)
-                        break
-                    else:
-                        increased_thresh -= 10
-                        attempt += 1
-                        continue
+                        if hull is not None and len(hull) >= 5:
+                            ellipse = self.fit_ellipse(hull)
+                            break
+                    
+                    increased_thresh -= 10
+                    attempt += 1
+                    continue
             else: 
                 increased_thresh -= 10
                 attempt += 1
@@ -582,7 +582,7 @@ class HeadTiltDetector:
         
         # 傾きを短径で表示
         center_point = (int(center[0]), int(center[1]))
-        length = int(axes[1] / 2)
+        length = int(axes[0] / 2)
         rad = np.deg2rad(angle)
         x_offset = int(length * np.cos(rad))
         y_offset = int(length * np.sin(rad))

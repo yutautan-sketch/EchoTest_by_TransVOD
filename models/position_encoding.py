@@ -1,11 +1,15 @@
+# Modified by Kodaira Yuta
 # ------------------------------------------------------------------------
-# Deformable DETR
+# Modified from TransVOD
+# Copyright (c) 2022 Qianyu Zhou et al. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
+# ------------------------------------------------------------------------
+# Modified from Deformable DETR
 # Copyright (c) 2020 SenseTime. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 [see LICENSE for details]
 # ------------------------------------------------------------------------
 # Modified from DETR (https://github.com/facebookresearch/detr)
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-# ------------------------------------------------------------------------
 
 """
 Various positional encodings for the transformer.
@@ -95,3 +99,53 @@ def build_position_encoding(args):
         raise ValueError(f"not supported {args.position_embedding}")
 
     return position_embedding
+
+
+def frame_position_embedding_sine(frame_ids: torch.Tensor, d_model: int, temperature=10000.0):
+    """
+    Create a Sinusoidal Position Embedding based on relative frame indexes.
+    Based on Attention is all you need paper(Vaswani et al.).
+    """
+
+    device = frame_ids.device
+    T = frame_ids.size(0)
+
+    pe = torch.zeros(T, d_model, device=device)
+
+    # divisor
+    div_term = torch.exp(
+        torch.arange(0, d_model, 2, device=device, dtype=torch.float32)
+        * (-math.log(float(temperature)) / d_model)
+    )
+
+    # Even (2i)
+    pe[:, 0::2] = torch.sin(frame_ids.float().unsqueeze(1) * div_term)
+
+    # Odd (2i+1)
+    pe[:, 1::2] = torch.cos(frame_ids.float().unsqueeze(1) * div_term)
+
+    return pe
+
+
+def build_frame_position_encoding(
+    frame_num: int,
+    query_num: int,
+    d_model: int,
+    device: torch.device
+    ):
+    """
+    Build Position Embedding based on relative frame indexes.
+    Can be used in TQE(Temporal Query Encoder) in deformable_transformer_multi.py.
+    output: pos [1, frame_num*query_num, d_model]
+    """
+
+    T = frame_num * query_num                        # Sequence length
+    indices = torch.arange(T, device=device)         # [0, 1, 2, ..., T-1]
+
+    frame_ids = indices // query_num                 # Frame_id to which each token belongs
+
+    pos = frame_position_embedding_sine(frame_ids, d_model)  # [T, d_model]
+    pos = pos.unsqueeze(0)                           # [1, T, d_model]
+
+    return pos
+

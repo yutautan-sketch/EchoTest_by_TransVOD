@@ -24,7 +24,6 @@ def collect_class_predictions(all_frame_preds, target_classes, score_threshold=0
     Returns:
         frames_bboxes ({target_class: list}):
             各フレームごとの [(bbox, logits), ...] のリスト
-            （trim_inactive_regions() に直接渡せる形式）
         new_dict (dict):
             特定クラス(target_class)を除外した新しい all_frame_preds
     """
@@ -74,7 +73,8 @@ def measure_head(
     model,
     transform,
     device,
-    normalize_ellipse: bool = False
+    normalize_ellipse=False,
+    img_size=None
     ):
     """
     特定クラスを抽出し、最大スコアのBBoxに HeadTiltDetector を適用する。
@@ -101,8 +101,8 @@ def measure_head(
         dict or None:
             検出結果(失敗時は None)
     """
+    assert not (normalize_ellipse and img_size is not None), "normalize と img_size は同時に指定できません。"
     from detection_tools.falx_predict_show import HeadTiltDetector
-    os.makedirs(result_path, exist_ok=True)
     vid_name = os.path.basename(vid_path)
     
     # 0. HeadTiltDetector の初期化
@@ -192,7 +192,7 @@ def measure_head(
     (cx, cy), (diamX, diamY), rotation_deg = ellipse
     cx = cx + best_box_coord[0]
     cy = cy + best_box_coord[1]
-    ellipse = ((cx, cy), (diamX, diamY), rotation_deg)
+    ellipse = ((cx, cy), (diamX/2, diamY/2), rotation_deg)  # 半径として格納
     
     # 描画
     # cv2.imwrite(os.path.join(result_path, f"result_head_crop.jpg"), img_vis)
@@ -201,52 +201,75 @@ def measure_head(
     best_frame_img.paste(img_vis, (int(best_box_coord[0]), int(best_box_coord[1])))
     best_frame_img = np.array(best_frame_img)
     cv2.rectangle(best_frame_img, (int(best_box_coord[0]), int(best_box_coord[1])), (int(best_box_coord[2]), int(best_box_coord[3])), (0, 255, 255), 2)
+    
+    os.makedirs(result_path, exist_ok=True)
     cv2.imwrite(os.path.join(result_path, f"result_head.jpg"), best_frame_img)
     
-    # 切り抜く前の画像サイズで正規化（回転補正付き）
-    if normalize_ellipse:
-        (cx, cy), (diamX, diamY), rotation_deg = ellipse
+    # 2.1 正規化・スケール変換
+    if normalize_ellipse or img_size is not None:
+        if normalize_ellipse:
+            img_size = np.array([1.0, 1.0])
 
-        # 回転角をラジアンへ変換
+        W_eff, H_eff = img_size
+        mm_per_px_x = W_eff / w
+        mm_per_px_y = H_eff / h
+
+        (cx, cy), (radX, radY), rotation_deg = ellipse
+
+        # --- 中心座標 ---
+        cx_s = cx * mm_per_px_x
+        cy_s = cy * mm_per_px_y
+
+        # --- 回転補正付き半径 ---
         theta = np.deg2rad(rotation_deg)
 
-        # --- 横方向直径補正 ---
-        diamX_norm = diamX * np.sqrt((np.cos(theta) / w) ** 2 + (np.sin(theta) / h) ** 2)
+        radX_s = radX * np.sqrt(
+            (np.cos(theta) * mm_per_px_x) ** 2 +
+            (np.sin(theta) * mm_per_px_y) ** 2
+        )
 
-        # --- 縦方向直径補正（直交方向） ---
-        theta_y = theta + np.pi / 2.0
-        diamY_norm = diamY * np.sqrt((np.cos(theta_y) / w) ** 2 + (np.sin(theta_y) / h) ** 2)
-
-        # --- 中心座標も正規化 ---
-        cx_norm = cx / w
-        cy_norm = cy / h
+        radY_s = radY * np.sqrt(
+            (np.cos(theta + np.pi / 2) * mm_per_px_x) ** 2 +
+            (np.sin(theta + np.pi / 2) * mm_per_px_y) ** 2
+        )
 
         ellipse = (
-            (cx_norm, cy_norm),
-            (diamX_norm / 2.0, diamY_norm / 2.0),  # 半径として格納
+            (cx_s, cy_s),
+            (radX_s, radY_s),
             rotation_deg
         )
+    
+    # 3. BPDを計測
+    # NOTE engine_detec.py に detection_tools/falx_predict_show.ShortDimFinder による処理を実装するまで
+    # 楕円の短径を横幅に用いること
+    bpd = min(ellipse[1]) * 2.0
     
     return {
         "frame_idx": best_frame_idx,
         "score": best_score,
         "ellipse": ellipse,
         "tilt_direction": tilt_direction,
-        "image": best_frame_img
+        "image": best_frame_img,
+        "bpd": bpd
     }
 
 # body
-def measure_body(frames_bboxes,
-                 target_label_num,
-                 vid_path,
-                 device,
-                 result_path='',
-                 max_attempt=2,
-                 combine_num=1,
-                 mask_size=0.95, 
-                 mask_mode='ellipse',
-                 debugmode=0):
-    from detection_tools.body_predict_show import body_detect
+def measure_body(
+    frames_bboxes,
+    target_label_num,
+    vid_path,
+    device,
+    result_path='',
+    max_attempt=1,
+    combine_num=1,
+    mask_size=0.95, 
+    mask_mode='ellipse',
+    normalize=False,
+    img_size=None,
+    debugmode=0,
+    ):
+    from detection_tools.body_predict_show import body_detect, ellipse_perimeter
+    assert not (normalize and img_size is not None), "normalize と img_size は同時に指定できません。"
     
     # 1. frames_bboxes より最大スコアのBBoxを得る
     best_score = -float('inf')
@@ -264,6 +287,8 @@ def measure_body(frames_bboxes,
                 best_box = torch.tensor(bbox).to(device)
                 best_box = box_ops.box_cxcywh_to_xyxy(best_box.unsqueeze(0))[0].cpu().numpy()  # xyxy
                 frame_path = f"{vid_path}/{vid_name}_all_{frame_idx:05d}.jpg" 
+    if best_box is None:
+        return None
     
     # 2. 対応するフレーム画像よりBBoxを切り取る
     frame_img = cv2.imread(frame_path)
@@ -272,13 +297,13 @@ def measure_body(frames_bboxes,
         exit(1)
     h, w, _ = frame_img.shape
     best_box = best_box[0] * np.array([w, h, w, h])  # スケーリング
-    bbox_img = crop_image_with_margin(frame_img, best_box, 0.03, 0.03)
+    bbox_img = crop_image_with_margin(frame_img, best_box, 0.0, 0.0)
     if debugmode > 0:
         cv2.imwrite(os.path.join(result_path, f"result_cropped_body.jpg"), bbox_img)
     
     # 3. 測定結果を得る
     bbox_img = cv2.cvtColor(bbox_img, cv2.COLOR_BGR2GRAY)
-    result, ellipse, circle = body_detect(
+    result = body_detect(
         img=bbox_img,
         max_attempt=max_attempt,
         combine_num=combine_num,
@@ -286,26 +311,113 @@ def measure_body(frames_bboxes,
         mask_mode=mask_mode,
         debugmode=debugmode,
     )
-    if result is not None:
-        cv2.imwrite(os.path.join(result_path, f"result_body.jpg"), result)
+    if result is None:
+        return None
+    
+    img_cp, ellipse, circle = result
+    frame_img_pil = Image.fromarray(frame_img)
+    img_cp_pil = Image.fromarray(img_cp)
+    frame_img_pil.paste(img_cp_pil, (int(best_box[0]), int(best_box[1])))
+    frame_img = np.array(frame_img_pil)
+    cv2.rectangle(frame_img, (int(best_box[0]), int(best_box[1])), (int(best_box[2]), int(best_box[3])), (0, 255, 255), 2)
+    
+    os.makedirs(result_path, exist_ok=True)
+    cv2.imwrite(os.path.join(result_path, f"result_body.jpg"), frame_img)
+    
+    # 切り抜く前の画像サイズで正規化（回転補正付き）
+    if img_size is not None or normalize:
+        if normalize:
+            img_size = np.array([1.0, 1.0])
+        W_mm, H_mm = img_size
+        mm_per_px_x = W_mm / w
+        mm_per_px_y = H_mm / h
+
+        # ---------- ellipse ----------
+        if ellipse is not None:
+            (cx, cy), (diam_x, diam_y), rotation_deg = ellipse
+
+            # bbox_img → 元画像 px
+            cx_img = best_box[0] + cx
+            cy_img = best_box[1] + cy
+
+            # px → mm
+            cx_mm = cx_img * mm_per_px_x
+            cy_mm = cy_img * mm_per_px_y
+
+            theta = np.deg2rad(rotation_deg)
+
+            diam_x_mm = diam_x * np.sqrt(
+                (np.cos(theta) * mm_per_px_x) ** 2 +
+                (np.sin(theta) * mm_per_px_y) ** 2
+            )
+
+            diam_y_mm = diam_y * np.sqrt(
+                (np.cos(theta + np.pi / 2) * mm_per_px_x) ** 2 +
+                (np.sin(theta + np.pi / 2) * mm_per_px_y) ** 2
+            )
+
+            ellipse = (
+                (cx_mm, cy_mm),
+                (diam_x_mm, diam_y_mm),
+                rotation_deg
+            )
+
+        # ---------- circle ----------
+        if circle is not None:
+            (cx, cy), (rad, _), _ = circle
+
+            cx_img = best_box[0] + cx
+            cy_img = best_box[1] + cy
+
+            cx_mm = cx_img * mm_per_px_x
+            cy_mm = cy_img * mm_per_px_y
+
+            rad_x_mm = rad * mm_per_px_x
+            rad_y_mm = rad * mm_per_px_y
+
+            circle = (
+                (cx_mm, cy_mm),
+                (rad_x_mm, rad_y_mm),
+                0
+            )
+    
+    # 4. ellipse, circle のうち最大の円周を決定する
+    best_peri = None
+    if ellipse is not None:
+        peri_elli = ellipse_perimeter((
+            ellipse[1][0],
+            ellipse[1][1]
+        ))
+        best_peri = peri_elli
+    if circle is not None:
+        peri_circ = ellipse_perimeter((
+            circle[1][0],
+            circle[1][1]
+        ))
+        if best_peri is None or peri_circ > best_peri:
+            best_peri = peri_circ
     
     return {
         "frame_idx": best_frame_idx,
         "score": best_score,
         "ellipse": ellipse, 
         "circle": circle,
-        "image": result
+        "image": frame_img,
+        "ac": best_peri
     }
 
 # leg
 def track_boxes_dp(
+    vid_path,
     frames_bboxes,
     all_frame_preds,
     all_frame_preds_o,
     track_label_num,
     max_skip,
     device,
-    result_path=None
+    top_k=1,
+    result_path=None,
+    img_size=None
     ):
     """
     frames_bboxes より軌跡決定 -> all_frame_preds に再編入する。
@@ -315,129 +427,81 @@ def track_boxes_dp(
         extract_smoothest_trajectory_dp,
         draw_tracking_on_white_canvas
     )
-    all_frame_preds = copy.deepcopy(all_frame_preds)
-    all_frame_preds_o = copy.deepcopy(all_frame_preds_o)
+    from util.temp2 import traj_points_from_img
+    
+    if all_frame_preds is not None and all_frame_preds_o is not None:
+        all_frame_preds = copy.deepcopy(all_frame_preds)
+        all_frame_preds_o = copy.deepcopy(all_frame_preds_o)
     
     # 1. 連続区間を取り出す
-    trimmed_bboxes = trim_inactive_regions(frames_bboxes)
+    trimmed_bboxes = trim_inactive_regions(frames_bboxes, min_valid_vac=3)
     
     # 2. 軌跡を決定
     all_trajectories = []
     for seg in trimmed_bboxes:  # seg = 1つの検出区間
         traj = extract_smoothest_trajectory_dp(
-            seg,
+            segment=seg,
+            device=device,
             target_class=track_label_num,
-            top_k=2,
-            max_rel_dist=0.05,
+            img_size=img_size,
+            vid_path=vid_path,
+            min_valid=3,
+            top_k=top_k,
+            overlap_thresh=0.1,
+            max_rel_dist=0.07,
             alpha=2.0,
             beta=0.1,
             gamma_skip=0.05,
             max_skip=max_skip,
-            new_start_penalty=0.5,
-            lambda_len=0.18,
+            lambda_len=0.19,
         )
         if traj:  # 空でなければ追加
             all_trajectories.extend(traj)
     # print("all_trajectories length", len(all_trajectories))
     
-    # 3. 軌跡を all_frame_preds に再編入
-    for traj in all_trajectories:
-        for frame_idx, bbox, logits in traj:
-            all_frame_preds[frame_idx].append({
-                "boxes": torch.tensor(bbox, dtype=torch.float32, device=device),
-                "logits": logits if isinstance(logits, torch.Tensor) else torch.tensor(logits, 
-                                                                                        dtype=torch.float32, 
-                                                                                        device=device),
-                "labels": int(track_label_num)
-            })
-    
-    # 4. 空フレーム（2.を通して予測が全除外されたフレーム）を補完
-    for frame_idx in all_frame_preds:
-        if len(all_frame_preds[frame_idx]) == 0:
-            # all_frame_preds_o の予測クエリを再入力
-            pred_o = all_frame_preds_o[frame_idx]
-            new_preds = []
-            for p_o in pred_o:
-                new_preds.append({
-                    "boxes": p_o["boxes"],
-                    "logits": p_o["logits"],
-                    "labels": 0  # 背景クラス扱い
+    if all_frame_preds is not None and all_frame_preds_o is not None:
+        # 3. 軌跡を all_frame_preds に再編入
+        for traj in all_trajectories:
+            for frame_idx, bbox, logits, _ in traj["trajectory"]:
+                if isinstance(frame_idx, float):
+                    continue
+                all_frame_preds[frame_idx].append({
+                    "boxes": torch.tensor(bbox, dtype=torch.float32, device=device),
+                    "logits": logits if isinstance(logits, torch.Tensor) else torch.tensor(logits, 
+                                                                                            dtype=torch.float32, 
+                                                                                            device=device),
+                    "labels": int(track_label_num)
                 })
-                break
-            all_frame_preds[frame_idx] = new_preds
         
-    # 5. 正規化された全長を計測
-    '''
-    femur_trajs = []
-    for traj in all_trajectories:
-        # 全ての経過点を格納
-        femur_traj = []
-        
-        # frame_idx でソート
-        traj.sort(key=lambda x: x[0])
-        
-        # 各フレームについて
-        for i, (frame_idx, bbox, logits) in enumerate(traj):
-            # 画像を取得
-            frame_path = ...
-            frame = cv2.imread(frane_path)
-            h, w, _ = frame.shape  # 正規化に用いる画像サイズ
-            
-            # BBox範囲を切り抜き
-            bbox_img = crop_image_with_margin(frame, bbox, w_margin_ratio=0.05, h_margin_ratio=0.05)
-            img_cp = cv2.cvtColor(bbox_img, cv2.COLOR_BGR2GRAY)
-            
-            # 二値化
-            _, filtered_mask = cv2.threshold(thresh, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            
-            # 面積最大の輪郭を抽出
-            contours, _ = cv2.findContours(filtered_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            contours_num = len(contours)
-            top_contours = sorted(contours, key=cv2.contourArea, reverse=True)[:min(combine_num, contours_num)]
-            combined_contour = np.vstack(top_contours)
-            
-            # 外接する回転矩形 -> 端点を取得
-            rect = cv2.minAreaRect(combined_contour)
-            # 矩形の中心位置を骨の通過点として取得
-            # frame 内での座標に変換し h, w を用いて正規化すること!
-            femur_point = ...
-            point.append((frame_idx, femur_point, logits))  # all_trajectories の形状にならいタプルで格納
-            
-            # 骨はBBoxの追跡方向に伸びていると想定
-            if i == 0 or i == len(traj):
-                # 矩形の短辺の中心位置を骨の端点とする
-                # frame 内での座標に変換し h, w を用いて正規化すること!
-                end_points = ...
-                
-                if i == 0:
-                    # bbox から traj[i+1] のBBoxへの移動方向と反対側にある端点 end_point をとる
-                    direction = ...
-                    end_point = ...
-                    
-                    # femur_traj 先頭に端点を追加
-                    femur_traj.insert(0, (frame_idx-1, femur_point, None))
-                else:
-                    # bbox から traj[i-1] のBBoxへの移動方向と反対側にある端点 end_point をとる
-                    direction = ...
-                    end_point = ...
-                    
-                    # femur_traj 最後尾に端点を追加
-                    femur_traj.append((frame_idx+1, femur_point, None))
+        # 4. 空フレーム（2.を通して予測が全除外されたフレーム）を補完
+        for frame_idx in all_frame_preds:
+            if len(all_frame_preds[frame_idx]) == 0:
+                # all_frame_preds_o の予測クエリを再入力
+                pred_o = all_frame_preds_o[frame_idx]
+                new_preds = []
+                for p_o in pred_o:
+                    new_preds.append({
+                        "boxes": p_o["boxes"],
+                        "logits": p_o["logits"],
+                        "labels": 0  # 背景クラス扱い
+                    })
+                    break
+                all_frame_preds[frame_idx] = new_preds
     
-        # femur_traj を繋ぐ直線の距離を計算
-        femur_length = ...
-        
-        # 全体の結果に格納
-        femur_trajs.append(femur_traj)
-    '''
+    femur_trajs = all_trajectories
     
     # 6. 軌跡を描画して保存
-    if result_path is not None:
+    if all([
+        result_path is not None,
+        all_frame_preds is not None,
+        all_frame_preds_o is not None
+    ]):
         os.makedirs(result_path, exist_ok=True)
         draw_tracking_on_white_canvas(
             frames_bboxes=all_frame_preds, 
-            all_trajectories=all_trajectories,
+            all_trajectories=femur_trajs,
+            canvas_size=(770, 512),
             save_dir=result_path
         )
 
-    return all_frame_preds, all_trajectories
+    return all_frame_preds, femur_trajs

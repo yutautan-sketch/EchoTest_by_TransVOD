@@ -348,7 +348,7 @@ def draw_bboxes_on_frame(frame, device, bboxes, scores, labels=None, threshold=0
         bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0][0]
         return tuple(int(c) for c in bgr)  # (B, G, R)
 
-    color = get_color(batch_idx)
+    # color = get_color(batch_idx)
     
     # [cx, cy, w, h] -> [x_min, y_min, x_max, y_max]
     bboxes = bboxes.unsqueeze(0)  # [num_queries, 4] -> [1, num_queries, 4]
@@ -363,7 +363,7 @@ def draw_bboxes_on_frame(frame, device, bboxes, scores, labels=None, threshold=0
             # ラベル付きでスコアを表示（例："1: 0.87"）
             label_text = f"{label_idx}: {score:.2f}"
             
-            frame = cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), color=color, thickness=2)
+            frame = cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), color=color, thickness=4)
             frame = cv2.putText(frame, f"{label_text}", (x_min, y_min - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     return frame
@@ -377,8 +377,8 @@ def evaluate_whole_video_custom(
     threshold, 
     transforms=None,
     stride=1, 
-    min_valid_segment=5, 
     track_label_num=1,
+    prob_thresh=False
     ):
     """
     Visual evaluation with sliding window of frames.
@@ -425,7 +425,7 @@ def evaluate_whole_video_custom(
 
     model.eval()
     with torch.no_grad():
-        for batch_idx, ((start, frame_batch), raw_batch) in enumerate(zip(frame_batches, raw_frame_batches)):
+        for batch_idx, ((start, frame_batch), raw_batch) in tqdm(enumerate(zip(frame_batches, raw_frame_batches))):
             # モデルに渡すテンソルリストをdeviceに転送
             samples = [img.to(device) for img in frame_batch]
 
@@ -433,7 +433,7 @@ def evaluate_whole_video_custom(
             pred_boxes_batch = outputs['pred_boxes']    # [batch_size, num_queries, 4] in cxcywh
             pred_logits_batch = outputs['pred_logits']  # [batch_size, num_queries, num_classes]
             
-            print(f"Processed batch {batch_idx + 1}/{len(frame_batches)}")
+            # print(f"Processed batch {batch_idx + 1}/{len(frame_batches)}")
 
             for frame_idx, (raw_frame, pred_boxes, pred_logits) in enumerate(zip(raw_batch, pred_boxes_batch, pred_logits_batch)):
                 frame_idx = start + frame_idx + 1
@@ -443,7 +443,11 @@ def evaluate_whole_video_custom(
                 # 各クエリの最大スコアラベルを取得
                 # ただしスコアが閾値以下のクエリのクラスは背景(0)にする
                 # NOTE スコアではなくsoftmaxで閾値処理する方法も検討
-                scores, pred_labels = pred_logits.max(-1)
+                # scores, pred_labels = pred_logits.max(-1)
+                scores, pred_labels = pred_logits[:, 1:].max(-1)  # クラス1以降から最大を取得
+                if prob_thresh:
+                    scores = torch.sigmoid(scores)
+                pred_labels = pred_labels + 1  # インデックスをクラス番号にシフト
                 pred_labels[scores < threshold] = 0
                 
                 # --- 予測を蓄積 ---
@@ -467,9 +471,10 @@ def evaluate_whole_video_custom(
                     scores=scores, 
                     labels=pred_labels, 
                     threshold=threshold, 
-                    batch_idx=0
+                    batch_idx=batch_idx
                 )
                 cv2.imwrite(str(output_path), annotated_frame)
+            # break
     
     return all_frame_preds
 
