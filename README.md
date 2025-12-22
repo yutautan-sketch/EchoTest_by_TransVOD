@@ -58,72 +58,76 @@ python setup.py build develop --user
 
 ### クイックスタート:
 1.\
-`./results/transvod`ディレクトリを作成し、TransVODのパラメーターファイルが入ったディレクトリ`param_name/checkpoint____.pth`を置く\
-また`./exps/ViT_model`ディレクトリを作成し、ViTのパラメーターファイル`falx_model_ViT_epoch___.pth`を置く
+`./results/transvod`ディレクトリを作成し、TransVODのパラメーターファイルが入ったディレクトリ`251101`と`251130`を置く（ディレクトリのままダウンロードし、そのまま置いてください）\
+また`./exps/ViT_model`ディレクトリを作成し、ViTのパラメーターファイル`falx_model_ViT_epoch080.pth`を置く
 ```
 # 以下の存在を確認
 EchoTest_by_TransVOD/
 ├── results/
 │   └── transvod/
-│       └── hbl_yymmdd_~/
-│           └──checkpoint____.pth
+│       └── hbl_251101/
+│       │   └── hbl_251101_mm=0.7_topk=3_boxes=gt/
+│       │       └── checkpoint0049.pth
+│       │       └── transformer_config.txt
+│       │
+│       └── hbl_251130/
+│           └── femur_251128_mm=0.0_topk=3_boxes=gt/
+│               └── checkpoint0049.pth
+│               └── transformer_config.txt
+│
 └── exps/
     └── ViT_model/
-        └── falx_model_ViT_epoch___.pth
+        └── falx_model_ViT_epoch080.pth
 ```
 
 2.\
-動画(例:`video_name.mp4`)を用意して、`./util/vid_2_frames.py`43行目を以下の様に編集
+動画(例:`video_name_01.mp4, video_name_02.mp4, ...`)を用意して、`./data/videos`ディレクトリを作成し、その中に動画ファイルを置く
 ```
-40     cap.release()
-41     print(f"Saved {frame_idx} frames to: {output_dir}")
-42
-43 extract_frames('video_name.mp4')
-```
-デフォルトでは300枚までの分割となるので、より多くしたい場合は`max_frame_num`に任意の値を入れてください
-```
-43 extract_frames('video_name.mp4', max_frame_num=1e+5)  # 大きな数字を入力すれば全フレームを分割して終了します
-```
-以下を実行して、動画をフレームに分割
-```
-python util/vid_2_frames.py
-```
-実行後、以下のディレクトリの存在を確認
-```
+# 以下のようにファイルを置く
 EchoTest_by_TransVOD/
 └── data/
-    └── vid/
-        └── Data/
-            └── VID/
-                └── val/
-                    └── without_anno/
-                        ├── video_name_all_00001.jpg
-                        ├── video_name_all_00002.jpg
-                        ├── ...
+    └── videos/
+        ├── video_name_01.mp4
+        ├── video_name_02.mp4
+        ├── ...
 ```
 
 3.\
-`inf.sh`を実行
+FLのみを測定する場合は`ezinf_femur.sh`を、BPD/AC/FLを測定する場合は`ezinf_hbl`を実行\
+実行すると以下のように：\
+A. 検出する最低確率（その物体がBPD/AC/FLである確率がAIにとって何パーセント以上の時に採用するか）\
+B. 動画の横幅（mm単位）\
+C. 動画の高さ（mm単位）\
+D. 1度にAIが検出結果を出力するフレームの数（1~12の整数。小さいほど1枚のフレームを何度も確認するため検出が遅くなり、大きいほど速度が上がります）\
+について聞かれるので、数値を入力してエンターキーを押します（または何も入力せずにエンターキーを押すことで、デフォルトの値で検出を行います）\
 ```
-bash inf.sh
+Enter Probability Threshold[%] (or press Enter to use default 50.0%):   # A. 検出する最低確率 デフォルトは50%
+Enter Image Scale Width[mm] (or press Enter to use default 200mm):      # B. 動画の横幅 デフォルトは200mm
+Enter Image Scale Height[mm] (or press Enter to use default 200mm):     # C. 動画の高さ デフォルトは200mm
+Enter Number of Frames to Process at Once (or press Enter to use default 1) between 1~12:  # D. 1度にAIが検出結果を出力するフレームの数
 ```
 
 4.\
-ディレクトリ`/results/without_anno/score=0.0_giou=0.0/checkpoint____/frame_video_name`内に検出結果が保存されます\
-頭蓋骨の測定結果は`result_head.jpg`、腹部の測定結果は`result_body.jpg`、大腿骨の追跡結果は`traj_vis`ディレクトリに保存されます
+FLのみの場合はディレクトリ`./results/wo_anno_femur_frame`内、BPD/AC/FLの場合は`./results/wo_anno_hbl_frame`に検出結果が保存されます\
+動画ごとにディレクトリが作成され、頭蓋骨の測定結果は`result_head.jpg`、腹部の測定結果は`result_body.jpg`、大腿骨の追跡結果は`traj_vis`ディレクトリ、各フレームの予測結果は`frames`ディレクトリに保存されます\
+測定結果は標準出力に表示される他、`measurement_result.txt`ファイルに保存されます
 ```
 EchoTest_by_TransVOD/
 └── results/
-    └── without_anno/
-        └── score=0.0_giou=0.0/
-            └── checkpoint____/
-                └── frame_video_name/
-                    ├── traj_vis/
-                    │   ├── trajectory_seg0.jpg
-                    │   ├── ...
-                    ├── result_head.jpg
-                    ├── result_body.jpg
-                    ├── frame_00001.jpg
-                    ├── frame_00002.jpg
-                    ├── ...
+    └── wo_anno_hbl_frame/  # または wo_anno_femur_frame
+        ├── video_name_01/
+        │   ├── measurement_result.txt
+        │   ├── result_head.jpg
+        │   ├── result_body.jpg
+        │   ├── traj_vis/
+        │   │   ├── trajectory_seg0.jpg
+        │   │   ├── ...
+        │   │
+        │   └── frames
+        │       ├── frame_00001.jpg
+        │       ├── frame_00002.jpg
+        │       ├── ...
+        │
+        ├── video_name_02/
+        ├── ...
 ```
