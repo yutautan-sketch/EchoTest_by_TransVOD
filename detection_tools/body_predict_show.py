@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 # 楕円の近似周囲長（Ramanujan 第2式） from https://arxiv.org/pdf/math/0506384
 # radii = (rad_x, rad_y)
 def ellipse_perimeter(radii):
-    print(radii)
     a, b = radii
     h = ((a - b) ** 2) / ((a + b) ** 2)
     # Ramanujan approximation
