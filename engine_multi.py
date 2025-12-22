@@ -1,4 +1,8 @@
-# Modified by Qianyu Zhou and Lu He
+# Modified by Kodaira Yuta
+# ------------------------------------------------------------------------
+# Modified from TransVOD
+# Copyright (c) 2022 Qianyu Zhou et al. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
 # ------------------------------------------------------------------------
 # Modified from Deformable DETR
 # Copyright (c) 2020 SenseTime. All Rights Reserved.
@@ -6,7 +10,6 @@
 # ------------------------------------------------------------------------
 # Modified from DETR (https://github.com/facebookresearch/detr)
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-# ------------------------------------------------------------------------
 
 """
 Train and eval functions used in main.py
@@ -345,7 +348,7 @@ def draw_bboxes_on_frame(frame, device, bboxes, scores, labels=None, threshold=0
         bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0][0]
         return tuple(int(c) for c in bgr)  # (B, G, R)
 
-    color = get_color(batch_idx)
+    # color = get_color(batch_idx)
     
     # [cx, cy, w, h] -> [x_min, y_min, x_max, y_max]
     bboxes = bboxes.unsqueeze(0)  # [num_queries, 4] -> [1, num_queries, 4]
@@ -360,7 +363,7 @@ def draw_bboxes_on_frame(frame, device, bboxes, scores, labels=None, threshold=0
             # ラベル付きでスコアを表示（例："1: 0.87"）
             label_text = f"{label_idx}: {score:.2f}"
             
-            frame = cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), color=color, thickness=2)
+            frame = cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), color=color, thickness=4)
             frame = cv2.putText(frame, f"{label_text}", (x_min, y_min - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     return frame
@@ -374,8 +377,8 @@ def evaluate_whole_video_custom(
     threshold, 
     transforms=None,
     stride=1, 
-    min_valid_segment=5, 
     track_label_num=1,
+    prob_thresh=False
     ):
     """
     Visual evaluation with sliding window of frames.
@@ -422,7 +425,7 @@ def evaluate_whole_video_custom(
 
     model.eval()
     with torch.no_grad():
-        for batch_idx, ((start, frame_batch), raw_batch) in enumerate(zip(frame_batches, raw_frame_batches)):
+        for batch_idx, ((start, frame_batch), raw_batch) in tqdm(enumerate(zip(frame_batches, raw_frame_batches))):
             # モデルに渡すテンソルリストをdeviceに転送
             samples = [img.to(device) for img in frame_batch]
 
@@ -430,7 +433,7 @@ def evaluate_whole_video_custom(
             pred_boxes_batch = outputs['pred_boxes']    # [batch_size, num_queries, 4] in cxcywh
             pred_logits_batch = outputs['pred_logits']  # [batch_size, num_queries, num_classes]
             
-            print(f"Processed batch {batch_idx + 1}/{len(frame_batches)}")
+            # print(f"Processed batch {batch_idx + 1}/{len(frame_batches)}")
 
             for frame_idx, (raw_frame, pred_boxes, pred_logits) in enumerate(zip(raw_batch, pred_boxes_batch, pred_logits_batch)):
                 frame_idx = start + frame_idx + 1
@@ -440,7 +443,11 @@ def evaluate_whole_video_custom(
                 # 各クエリの最大スコアラベルを取得
                 # ただしスコアが閾値以下のクエリのクラスは背景(0)にする
                 # NOTE スコアではなくsoftmaxで閾値処理する方法も検討
-                scores, pred_labels = pred_logits.max(-1)
+                # scores, pred_labels = pred_logits.max(-1)
+                scores, pred_labels = pred_logits[:, 1:].max(-1)  # クラス1以降から最大を取得
+                if prob_thresh:
+                    scores = torch.sigmoid(scores)
+                pred_labels = pred_labels + 1  # インデックスをクラス番号にシフト
                 pred_labels[scores < threshold] = 0
                 
                 # --- 予測を蓄積 ---
@@ -464,132 +471,12 @@ def evaluate_whole_video_custom(
                     scores=scores, 
                     labels=pred_labels, 
                     threshold=threshold, 
-                    batch_idx=0
+                    batch_idx=batch_idx
                 )
                 cv2.imwrite(str(output_path), annotated_frame)
+            # break
     
     return all_frame_preds
-
-# 特定クラスを抽出し、最大スコアのBBoxに HeadTiltDetector を適用
-def measure_object(
-    vid_path, 
-    result_path, 
-    frames_bboxes, 
-    target_label_num, 
-    model,
-    transform,
-    device
-    ):
-    """
-    特定クラスを抽出し、最大スコアのBBoxに HeadTiltDetector を適用する。
-    
-    Args:
-        vid_path (str): 
-            動画フレームのディレクトリパス
-        result_path (str): 
-            結果保存ディレクトリパス
-        frames_bboxes (list): 
-            各フレームごとの [(bbox, logits), ...] のリスト
-        target_label_num (int):
-            対象クラスラベル
-        model (nn.Module):
-            分類モデル
-        transform (callable):
-            分類モデルへ渡すための前処理
-        device (torch.device):
-            デバイス
-        
-    Returns:
-        dict or None:
-            検出結果(失敗時は None)
-    """
-    from detection_tools.falx_predict_show import HeadTiltDetector, crop_image_with_margin
-    from PIL import Image
-    
-    # 0. HeadTiltDetector の初期化
-    detector = HeadTiltDetector(
-        distance_thresh=0.05,
-        thresh_addition=0,
-        target_sample_count=50,
-        neighbor_ratio=0.05,
-        max_attempts=10,
-        aspect_ratio_thresh=1.4,
-        fill_ratio_thresh=0.8,
-        combine_num=2
-    )
-    
-    # 1. 特定クラスの最大確信度予測を抽出
-    bbox_imgs = []  # bbox_imgs[frame_idx] = [h, w, c]
-
-    # 1.1 各フレームの中で最もスコアが高いBBoxを集める
-    vid_name = os.path.basename(vid_path)
-    for frame_idx, preds in enumerate(frames_bboxes, start=1):
-        best_score = -float('inf')
-        best_box = None
-        
-        # 該当フレームを特定
-        frame_path = f"{vid_path}/{vid_name}_all_{frame_idx:05d}.jpg"  
-        frame_img = cv2.imread(frame_path)
-        if frame_img is None:
-            print(f"Frame image not found: {frame_path}")
-            exit(1)
-        
-        # 最大スコアのBBoxを探索
-        for bbox, logits in preds:
-            score = torch.softmax(logits, dim=-1)[0, target_label_num].item()  # 確信度
-            if score > best_score:
-                best_score = score
-                best_box = torch.tensor(bbox).to(device)
-                best_box = box_ops.box_cxcywh_to_xyxy(best_box.unsqueeze(0))[0].cpu().numpy()  # xyxy
-        if best_box is None:
-            # print(f"Frame {frame_idx}: No bbox found for label {target_label_num}.")
-            continue
-        
-        # 最大スコアBBoxの画像を保存
-        h, w, _ = frame_img.shape
-        best_box = best_box[0] * np.array([w, h, w, h])  # スケーリング
-        bbox_img = crop_image_with_margin(frame_img, best_box, 0.0, 0.0)
-        bbox_imgs.append([frame_idx, bbox_img])
-    
-    if len(bbox_imgs) == 0:
-        print(f"ラベル {target_label_num} の検出が見つかりません。")
-        return None
-    
-    # 1.2 全BBox画像を model に入力してクラス0スコアで順位付け
-    for i, (frame_idx, bbox_img) in enumerate(bbox_imgs):
-        bbox_img = Image.fromarray(cv2.cvtColor(bbox_img, cv2.COLOR_BGR2RGB))
-        input_tensor = transform(bbox_img).unsqueeze(0).to(device)  # [1, C, H, W]
-        with torch.no_grad():
-            output = model(input_tensor)
-            score = torch.softmax(output, dim=1)[0, 0].item()  # クラス0のスコア
-            
-            bbox_imgs[i].append(score)  # bbox_imgs[i] = [frame_idx, bbox_img, score]
-
-    bbox_imgs.sort(key=lambda x: x[2], reverse=True)  # スコアで高順ソート
-    best_frame_idx, best_box_img, best_score = bbox_imgs[0][0], bbox_imgs[0][1], bbox_imgs[0][2]
-    print(f"Best frame idx: {best_frame_idx}, Best score: {best_score}")
-    
-    # cv2.imwrite(os.path.join(result_path, f"cropped.jpg"), cropped)
-    cv2.imwrite("cropped.jpg", best_box_img)
-    
-    # 2. HeadTiltDetector で傾き検出
-    result = detector.detect_head_tilt(best_box_img, debugmode=0)
-
-    if result is None:
-        print("楕円フィッティングに失敗しました。")
-        return None
-
-    ellipse, tilt_direction, img_vis = result
-    print(f"傾き方向: {tilt_direction}")
-    cv2.imwrite(os.path.join(result_path, f"result.jpg"), img_vis)
-    
-    return {
-        "frame_idx": best_frame_idx,
-        "score": best_score,
-        "ellipse": ellipse,
-        "tilt_direction": tilt_direction,
-        "image": img_vis
-    }
 
 # ----- VOC形式でのアノテーション保存 -----
 import xml.etree.ElementTree as ET

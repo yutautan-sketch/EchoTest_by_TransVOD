@@ -134,7 +134,7 @@ export NUM_WORKERS=2  # PyTorch DataLoader用（コア数に応じて調整）
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 #torchrun  --nproc_per_node=2 main.py\
 #python main.py\
-torchrun  --nproc_per_node=2 main.py\
+python main.py\
      --resume exps/COCO_general_model/swins_checkpoint0049.pth\
      --backbone swin_s_p4w7\
      --batch_size=1\

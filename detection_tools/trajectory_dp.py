@@ -1,9 +1,14 @@
 import os
 import cv2
 import copy
+import math
+from collections import deque
 import torch
 import numpy as np
-from collections import defaultdict
+import sys
+sys.path.append('../')
+from util.temp2 import load_frame, process_frame_for_femur_point, traj_points_from_img
+from util import box_ops
 
 # ========= ユーティリティ関数 =========
 def bbox_center(bbox):
@@ -17,72 +22,45 @@ def bbox_center(bbox):
     cx, cy, w, h = bbox
     return np.array([cx, cy])
 
-def collect_class_predictions(all_frame_preds, target_classes, score_threshold=0.0):
-    """
-    特定クラスの予測BBoxとスコアをフレーム順に抽出する。
+def contour_center(vid_path, fidx, bbox, device, combine_num=1, debugmode=0):
+    # 画像を取得
+    frame_img = load_frame(vid_path, fidx)
+    
+    # 外接する回転矩形 -> 中心を取得
+    femur_point_norm, _, _ = process_frame_for_femur_point(
+        frame_img=frame_img,
+        bbox=bbox,
+        combine_num=combine_num,
+        normalize=True,
+        device=device,
+        debugmode=0
+    )
+    
+    return np.array(femur_point_norm)
 
-    Args:
-        all_frame_preds (dict):
-            {frame_idx: [{"boxes": Tensor(4,), "logits": Tensor(C,), "labels": int}, ...]} の構造
-        target_classes ([int]):
-            抽出対象のクラスIDリスト
-        score_threshold (float):
-            このスコア未満の予測は除外する
-        
-    Returns:
-        frames_bboxes ({target_class: list}):
-            各フレームごとの [(bbox, logits), ...] のリスト
-            （trim_inactive_regions() に直接渡せる形式）
-        new_dict (dict):
-            特定クラス(target_class)を除外した新しい all_frame_preds
-    """
-    # frame_idx順にソートして統一
-    sorted_frames = sorted(all_frame_preds.keys())
-    target_classes = sorted(target_classes) if isinstance(target_classes, (list, tuple)) else [target_classes]
-    frames_bboxes = {target_class: [] for target_class in target_classes}
-    new_dict = {}
+def relaxed_threshold(max_rel_dist, fidx_dif, A=1.0, tau=2.0):
+    scale = 1 + A * (1 - math.exp(-fidx_dif / tau))
+    return max_rel_dist * scale
 
-    for frame_idx in sorted_frames:
-        frame_preds = all_frame_preds[frame_idx]
-        filtered_bboxes = {target_class: [] for target_class in target_classes}
-        remaining_preds = []
+def sigmoid_math(x):
+    return 1.0 / (1.0 + math.exp(-x))
 
-        for pred in frame_preds:
-            label = pred["labels"]
-            logits = pred["logits"]
-            bbox = pred["boxes"]
-            
-            # logits と bbox の形式を統一
-            if not isinstance(logits, torch.Tensor):
-                logits = torch.tensor(logits, dtype=torch.float32)
-
-            is_target = False
-            for target_class in target_classes:
-                # クラススコアの取得
-                score = logits[target_class].item() if logits.ndim == 1 else logits.squeeze()[target_class].item()
-                # クラス一致かつスコア閾値通過のみ抽出
-                if label == target_class and score >= score_threshold:
-                    filtered_bboxes[target_class].append((bbox.tolist(), logits))
-                    is_target = True
-            if not is_target:
-                remaining_preds.append(pred)
-
-        for target_class in target_classes:
-            frames_bboxes[target_class].append(filtered_bboxes[target_class])
-        new_dict[frame_idx] = remaining_preds
-
-    return frames_bboxes, new_dict
+def clamp_giou_sig(giou, center=-0.5, gain=10.0, g_max=1.0, g_min=0.0):
+    """Clamp giou between max and min using Sigmoid."""
+    giou_norm = sigmoid_math(gain * (giou - center))
+    giou_clamped = g_min + giou_norm * (g_max - g_min)
+    return giou_clamped
 
 # ========= 区間抽出 =========
-def trim_inactive_regions(frames_bboxes, min_valid=5, min_segment_length=2):
+def trim_inactive_regions(frames_bboxes, min_valid_vac=5, min_segment_length=2):
     """
     長い未検出区間で分割し、検出が連続している区間だけを抽出する。
 
     Args:
         frames_bboxes (list):
             各フレームの検出 [(bbox, logits), ...] のリスト。
-        min_valid (int):
-            この数だけ未検出が連続したら区間を終了する。
+        min_valid_vac (int):
+            この数より多く未検出が連続したら区間を終了する。
         min_segment_length (int):
             区間を new_list に追加する最小フレーム数。
 
@@ -102,7 +80,7 @@ def trim_inactive_regions(frames_bboxes, min_valid=5, min_segment_length=2):
             current_segment.append((n+1, bboxes))
         else:       # 未検出フレーム
             gap_count += 1
-            if gap_count >= min_valid:   # 区間を切る条件
+            if gap_count > min_valid_vac:   # 区間を切る条件
                 if len(current_segment) >= min_segment_length:
                     new_list.append(current_segment)
                 current_segment = []
@@ -116,7 +94,11 @@ def trim_inactive_regions(frames_bboxes, min_valid=5, min_segment_length=2):
 
 # ========= DP法の実行 =========
 def extract_smoothest_trajectory_dp(segment, 
+                                    device,
                                     target_class,       # 追跡するクラスラベル
+                                    img_size,           # 画像の縮尺 (np.array([mm, mm]))
+                                    vid_path=None,      # 画像へのパス
+                                    min_valid=5,        # 容認されているBBoxなしフレームの最大連続数
                                     top_k=1,            # 帰り値に含める軌跡の数
                                     overlap_thresh=0.3, # 異なる軌跡候補の重複率閾値
                                     max_rel_dist=0.1,   # 1フレームの移動距離閾値
@@ -124,77 +106,169 @@ def extract_smoothest_trajectory_dp(segment,
                                     beta=0.5,           # スコア項の重み
                                     gamma_skip=0.05,    # スキップペナルティ
                                     max_skip=2,         # 最大で何フレーム飛ばすか
-                                    new_start_penalty=0.1,  # 新規開始のペナルティ
-                                    lambda_len=0.01,        # 軌跡長へのボーナス
+                                    lambda_len=0.01,    # 軌跡長へのボーナス
                                     ):
     """
-    DP法で最も滑らかな軌跡を抽出する（誤検出に頑健）。
-    遷移が存在すれば必ず継続を優先し、新規開始は孤立時のみ。
+    DP法で最も滑らかな軌跡を抽出する
     計算概要：
-    軌跡がフレーム m のBBox番号 j まで続いたとして、フレーム n のBBox番号 i のコスト dp[n,i]を以下の様に決定する。
+    軌跡がフレーム m のBBox番号 j まで続いたとして、フレーム n のBBox番号 i のコスト dp[n,i] を以下の様に決定する。
+    initial_cost = -beta*log(score[n,i])
     if dist[(n,i),(m,j)] <= max_rel_dist * (n-m):
-        dp[n,i] = min(dp[m,j] + alpha * dist[(n,i),(m,j)] - beta * log(score[n,i]) + gamma_skip * (n-m-1))
+        dp[n,i] = min(
+            dp[m,j] + alpha * dist[(n,i),(m,j)] - beta * log(score[n,i]) + gamma_skip * (n-m-1),
+            initial_cost
+        )
     else:
-        dp[n,i] = -beta*log(score[n,i]) + new_start_penalty
-    dp[n,i] = dp[n,i] - lambda_len * length(dp[n,i])
+        dp[n,i] = initial_cost
+    dp[n,i] = dp[n,i] - lambda_len * (length(dp[n,i])-1)
     
     Args:
-        segment (list): trim_inactive_regions の1区間の出力
+        segment (list): 
+            trim_inactive_regions の1区間の出力
             形式: [(frame_idx, [(bbox, logits), ...]), ...]
-        target_class (int): 追跡するクラスラベル
-        top_k (int): 帰り値に含める軌跡の数
+        target_class (int): 
+            追跡するクラスラベル
+        vid_path (str): 
+            画像へのパス
+            Noneでないなら、画像内の物体から輪郭を抽出
+            -> 回転外接矩形の中心をBBox間距離計算に用いる
+        top_k (int): 
+            帰り値に含める軌跡の数
     Returns:
-        list of (frame_idx, bbox, logits): 最も滑らかな経路
+        list of (frame_idx, bbox, logits): 
+            最も滑らかな経路
     """
     debugmode = 0
+    N_dir = 3
+    min_motion_thresh=5e-3
+    motion_window_thresh=1.5e-2
+    cos_threshold = math.sqrt(0.5)  # 45 degree
+    max_cos_thresh = math.sqrt(0.75)  # 30 degree
     
     if not segment:
         return []
 
     num_frames = len(segment)
-    dp = []      # dp[t][j] = (累積コスト, prev_t, prev_j)
+    dp = []      # dp[t][j] = (累積コスト, prev_t, prev_j, mean_dir, len)
     centers = [] # 各BBoxの中心座標
 
     for t, (fidx, detections) in enumerate(segment):
-        dp.append([(np.inf, None, None)] * len(detections))
-        centers.append([bbox_center(b) for (b, _) in detections])
-
+        dp.append([(None)] * len(detections))
+        center_pt_list = []
+        if vid_path is not None:
+            for (bbox, _) in detections:
+                center_pt = contour_center(
+                    vid_path=vid_path, 
+                    fidx=fidx, 
+                    bbox=bbox, 
+                    device=device, 
+                    combine_num=1,
+                    debugmode=0
+                )
+                center_pt_list.append(center_pt)
+            centers.append(center_pt_list)
+        else:
+            centers.append([bbox_center(bbox) for (bbox, _) in detections])
+    
     # DPループ
+    debug_fidx = 0
     for t in range(num_frames):
         fidx, detections = segment[t]
+        
         for j, (bbox_j, logits_j) in enumerate(detections):
+            skip_num_debug = 1
             c_j = centers[t][j]
             # 対象クラスのみのスコアを算出
-            score_j = logits_j[0][target_class].item()
+            score_j = logits_j[0][target_class].sigmoid().item()
             
             # 始点とした時のスコアで初期化
-            new_cost = new_start_penalty + beta * -np.log(score_j + 1e-6)
-            dp[t][j] = (new_cost, None, None)
+            new_cost = beta * -np.log(score_j + 1e-6)
+            dp[t][j] = (new_cost, None, None, deque(maxlen=N_dir), 0)
             
             # 遷移元を調べる（Δ=1~max_skip）
             for skip in range(1, max_skip+1):
                 prev_t = t - skip
                 if prev_t < 0:
                     continue
+                
+                # Δに比例して許容距離を緩和
                 fidx_prev, detections_prev = segment[prev_t]
+                fidx_dif = (fidx - fidx_prev - 1)
+                # Δチェック
+                if fidx_dif > min_valid:
+                    continue
+                
                 for i, (bbox_i, logits_i) in enumerate(detections_prev):  # 遷移元のBBoxを取得
-                    c_i = centers[prev_t][i]
-                    dist = np.linalg.norm(c_j - c_i)
-                    # Δに比例して許容距離を緩和
-                    if dist > skip * max_rel_dist:
-                        continue
-                    prev_cost, _, _ = dp[prev_t][i]  # 遷移元のコストを取得
+                    # コストチェック
+                    prev_cost, _, _, prev_dirs, prev_len = dp[prev_t][i]  # 遷移元のコストを取得
                     if prev_cost == np.inf:
                         continue
+                    c_i = centers[prev_t][i]
+                    
+                    # 方向チェック（方向履歴がすでにある場合のみ）
+                    dist = np.linalg.norm(c_j - c_i)
+                    v_new_unit = (c_j - c_i) if dist>1e-6 else np.zeros(2)
+                    
+                    do_direction_check = True
+                    if dist < min_motion_thresh or prev_len == 0:
+                        do_direction_check = False
+                    elif len(prev_dirs) > 0:
+                        total_motion = sum(np.linalg.norm(v) for v in prev_dirs)
+                        if total_motion < motion_window_thresh:
+                            do_direction_check = False
+                    
+                    # print(f"\ndist: {dist} | c_j:{c_j} - c_i{c_i}")
+                    # print("prev_dirs:", prev_dirs)
+                    # print(f"do_direction_check: {do_direction_check} - total_motion={sum(np.linalg.norm(v) for v in prev_dirs)}")
+                    
+                    if do_direction_check:
+                        mean_dir = np.mean(np.array([v / (np.linalg.norm(v) + 1e-6) for v in prev_dirs]), axis=0)
+                        mean_dir /= (np.linalg.norm(mean_dir) + 1e-6)
+                        cos_sim = float(np.dot((v_new_unit/dist), mean_dir))
+                        
+                        # print(f"cos_sim: {cos_sim} - cos_threshold: {cos_threshold}")
+                        
+                        # HACK cos_thesh は fidx_dif に合わせて徐々に増加させた方がいい？
+                        cos_thresh = max_cos_thresh if fidx_dif == min_valid else cos_threshold
+                        if cos_sim < cos_thresh:
+                            continue
+                    
+                    
+                    # 距離チェック
+                    giou = box_ops.generalized_box_iou(
+                        box_ops.box_cxcywh_to_xyxy(torch.tensor(bbox_j)),
+                        box_ops.box_cxcywh_to_xyxy(torch.tensor(bbox_i))
+                    )
+                    max_giou_cost = 1.8
+                    min_giou_cost = 0.3
+                    # giou_cost = max_giou_cost - (max_giou_cost - min_giou_cost) * ((giou.item() + 1) / 2)  # 線形マッピング: 1 - lambda_giou * (0.0, 1.0]
+                    # giou_cost = max_giou_cost - (max_giou_cost - min_giou_cost) * (((giou.item() + 1) / 2) ** 1.75)  # 放物線マッピング
+                    # Sigmoidマッピング
+                    giou_cost = clamp_giou_sig(-giou.item(), center=0.5, gain=7.5, g_max=max_giou_cost, g_min=min_giou_cost)
+                    dist = dist * giou_cost
+                    
+                    # if fidx == 28 and fidx_prev == 27:
+                    #     print("GIoU:", giou)
+                    #     print("dist*giou_cost:", dist, "thresh:", relaxed_threshold(max_rel_dist, fidx_dif, A=0.75, tau=2.0))
+                    
+                    # if dist > relaxed_threshold(max_rel_dist, fidx_dif, A=0.75, tau=2.0):
+                    #     continue
+                    
                     # 遷移コスト 
                     # = 遷移前 + 距離コスト + 信頼度コスト + スキップペナルティ + 軌跡長ボーナス
+                    # new_cost = prev_cost \
+                    #     + alpha * dist \
+                    #     + beta * -np.log(score_j + 1e-6) \
+                    #     + gamma_skip * (skip - 1) \
+                    #     - lambda_len
                     new_cost = prev_cost \
-                        + alpha * dist \
+                        + alpha * dist\
                         + beta * -np.log(score_j + 1e-6) \
                         + gamma_skip * (skip - 1) \
-                        - lambda_len
+                        - lambda_len * (1 + fidx_dif * 0.2)
+                        
                     if new_cost < dp[t][j][0]:
-                        if dp[t][j][0] - new_cost > 1e-3 and debugmode == 2:
+                        if debugmode == 2:
                             print(
                                 f"new_cost[{fidx}][{j}]([{t}][{j}]): {dp[t][j][0]} -> {new_cost:.3f}"
                                 +f"\n= prev_cost({prev_cost:.3f})"
@@ -203,33 +277,28 @@ def extract_smoothest_trajectory_dp(segment,
                                 +f" + gamma_skip*(skip-1)({gamma_skip*(skip-1):.3f})"
                                 +f" - lambda_lem({lambda_len:.3f})"
                             )
-                            string = input("Press Any key to continue...")
-                            if string == "q":
-                                exit(0)
-                        dp[t][j] = (new_cost, prev_t, i)
-                        updated = True
+                            # if input("Press Any key to continue...") == "q": exit(0)
+
+                        # running mean update
+                        new_dirs = deque(prev_dirs, maxlen=N_dir)
+                        new_dirs.append(v_new_unit)
+                        dp[t][j] = (new_cost, prev_t, i, new_dirs, prev_len + 1)
+                        # exit()
 
     # 最良終端を探す
-    last_candidates = []
-    for t in range(num_frames):
-        for j, (c, _, _) in enumerate(dp[t]):
-            if c == np.inf:
-                continue
-            # 長さ推定（start_frame = 遡れるだけ遡る）
-            length = 1
-            tt, jj = t, j
-            while dp[tt][jj][1] is not None:
-                tt, jj = dp[tt][jj][1], dp[tt][jj][2]
-                length += 1
-            # print(f"[候補] frame={segment[t][0]}, j={j}, cost={c:.3f}, len={length}")
-            last_candidates.append((c, length, t, j))
+    last_candidates = [
+        (c, l+1, t, j)
+        for t in range(num_frames)
+        for j, (c, _, _, _, l) in enumerate(dp[t])
+        if c != np.inf and l > 0
+    ]
 
     # 軌跡なし
     if not last_candidates:
         return []
-    last_candidates.sort(key=lambda x: x[0])
 
     # 経路復元
+    last_candidates.sort(key=lambda x: x[0])
     trajectories = []
     used_bboxes = set()  # (frame_idx, bbox_idx) のタプル集合
     for cost, length, end_t, end_j in last_candidates:
@@ -252,32 +321,53 @@ def extract_smoothest_trajectory_dp(segment,
                 if overlap_count / length > overlap_thresh:
                     if debugmode > 0:
                         print("Overlap")
-                    trajectory = []
                     flag = False
                     break
             used_bboxes_temp.add(key)
             
-            trajectory.append((fidx, bbox, logits))
+            # フレーム番号, BBox, Logits, 大腿骨中心
+            trajectory.append((fidx, bbox, logits, centers[t][j]))
             
             # 前フレームへ
-            _, prev_t, prev_j = dp[t][j]
+            _, prev_t, prev_j, _, _ = dp[t][j]
             t, j = prev_t, prev_j
-        if flag and debugmode > 0: 
-            print(cost)
-        if len(trajectory) > 1:
-            used_bboxes.update(used_bboxes_temp)
+        if flag:
+            if debugmode > 0: 
+                print(cost)
+            
+            # NOTE from util.temp2 import traj_points_from_img を用いて
+            # 軌跡長を計算し、長さが閾値以下の場合は continue
             trajectory = trajectory[::-1]  # 時間順
-            trajectories.append(trajectory)
+            if vid_path is not None:
+                traj_dict = traj_points_from_img(
+                    vid_path,
+                    [{"trajectory": trajectory, "cost": cost}],
+                    combine_num=1,
+                    img_size=img_size,
+                    device=device,
+                )
+                total_len = math.sqrt(
+                    math.pow(traj_dict[0]["length"], 2.0)\
+                    + math.pow((1e-3 * float(length)), 2.0)
+                )
+                # print("sqrt(fem_len_pred^2 + (1e-3*len)^2):", total_len, "must >-0.12")
+                if total_len < 0.12:
+                    continue
+            else:
+                traj_dict = [{"trajectory": trajectory, "cost": cost}]
+            
+            used_bboxes.update(used_bboxes_temp)
+            trajectories.extend(traj_dict)
 
         if len(trajectories) >= top_k:
             break
-
-    return trajectories  # 上位k個の軌跡リスト
+    
+    return trajectories[:top_k]  # 上位k個の軌跡リスト
 
 # ========= 可視化関数（OpenCV） =========
 def draw_tracking_on_white_canvas(frames_bboxes, 
                                   all_trajectories, 
-                                  canvas_size=(480, 480), 
+                                  canvas_size=(100, 100), 
                                   save_dir="traj_vis"):
     """
     各検出区間の主軌跡を個別にキャンバスへ描画して保存する。
@@ -340,88 +430,21 @@ def draw_tracking_on_white_canvas(frames_bboxes,
                 cv2.rectangle(canvas, (x1, y1), (x2, y2), (150, 150, 150), 1)
 
         # --- 主軌跡（青線）---
+        if isinstance(traj, dict):
+            traj = traj["trajectory"]
         for i in range(1, len(traj)):
-            _, bbox1, _ = traj[i-1]
-            _, bbox2, _ = traj[i]
-            c1 = denormalize_center(bbox_center(bbox1))
-            c2 = denormalize_center(bbox_center(bbox2))
+            if len(traj[i])==4:
+                c1 = denormalize_center(traj[i-1][3])
+                c2 = denormalize_center(traj[i][3])
+            elif len(traj[i])==3:
+                _, bbox1, _, = traj[i-1]
+                _, bbox2, _, = traj[i]
+                c1 = denormalize_center(bbox_center(bbox1))
+                c2 = denormalize_center(bbox_center(bbox2))
+            print(f"Segment {seg_id}: Drawing line from {c1} to {c2}")
             cv2.line(canvas, c1, c2, (255, 0, 0), 2)
             cv2.circle(canvas, c2, 3, (255, 0, 0), -1)
 
-        save_path = os.path.join(save_dir, f"trajectory_seg{seg_id}.png")
+        save_path = os.path.join(save_dir, f"trajectory_seg{seg_id}.jpg")
         cv2.imwrite(save_path, canvas)
         print(f"[Saved] Segment {seg_id}: {save_path}")
-
-# ========= 追跡の実行 =========
-def track_boxes_dp(
-    frames_bboxes,
-    all_frame_preds,
-    all_frame_preds_o,
-    track_label_num,
-    max_skip,
-    device,
-    result_path=None
-    ):
-    """
-    frames_bboxes より軌跡決定 -> all_frame_preds に再編入する。
-    """
-    all_frame_preds = copy.deepcopy(all_frame_preds)
-    all_frame_preds_o = copy.deepcopy(all_frame_preds_o)
-    
-    # 1. 連続区間を取り出す
-    trimmed_bboxes = trim_inactive_regions(frames_bboxes)
-    
-    # 2. 軌跡を決定
-    all_trajectories = []
-    for seg in trimmed_bboxes:  # seg = 1つの検出区間
-        traj = extract_smoothest_trajectory_dp(
-            seg,
-            target_class=track_label_num,
-            top_k=2,
-            max_rel_dist=0.05,
-            alpha=2.0,
-            beta=0.1,
-            gamma_skip=0.05,
-            max_skip=max_skip,
-            new_start_penalty=0.5,
-            lambda_len=0.18,
-        )
-        if traj:  # 空でなければ追加
-            all_trajectories.extend(traj)
-    print("all_trajectories length", len(all_trajectories))
-    
-    # 3. 軌跡を all_frame_preds に再編入
-    for traj in all_trajectories:
-        for frame_idx, bbox, logits in traj:
-            all_frame_preds[frame_idx].append({
-                "boxes": torch.tensor(bbox, dtype=torch.float32, device=device),
-                "logits": logits if isinstance(logits, torch.Tensor) else torch.tensor(logits, 
-                                                                                        dtype=torch.float32, 
-                                                                                        device=device),
-                "labels": int(track_label_num)
-            })
-    
-    # 4. 空フレーム（2.を通して予測が全除外されたフレーム）を補完
-    for frame_idx in all_frame_preds:
-        if len(all_frame_preds[frame_idx]) == 0:
-            # all_frame_preds_o の予測クエリを再入力
-            pred_o = all_frame_preds_o[frame_idx]
-            new_preds = []
-            for p_o in pred_o:
-                new_preds.append({
-                    "boxes": p_o["boxes"],
-                    "logits": p_o["logits"],
-                    "labels": 0  # 背景クラス扱い
-                })
-            all_frame_preds[frame_idx] = new_preds
-    
-    # 5. 軌跡を描画して保存
-    if result_path is not None:
-        os.makedirs(result_path, exist_ok=True)
-        draw_tracking_on_white_canvas(
-            frames_bboxes=all_frame_preds, 
-            all_trajectories=all_trajectories,
-            save_dir=result_path
-        )
-
-    return all_frame_preds
