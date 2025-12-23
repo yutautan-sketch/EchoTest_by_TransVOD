@@ -51,7 +51,7 @@ pip install torch==2.1.2+cu118 torchvision==0.16.2+cu118 --extra-index-url https
 ### 設定:
 必要なライブラリをインストールし、セットアップ`models/ops/setup.py`を起動
 ```
-pip install -r requirements.txt
+pip install -r requirements_simple.txt
 cd ./models/ops
 python setup.py build develop --user
 ```
@@ -93,7 +93,7 @@ EchoTest_by_TransVOD/
 ```
 
 3.\
-FLのみを測定する場合は`ezinf_femur.sh`を、BPD/AC/FLを測定する場合は`ezinf_hbl.sh`を実行します\
+FLのみを測定する場合は`ezinf_femur.sh`を、BPD/AC/FLを測定する場合は`ezinf_hbl.sh`を実行します
 ```
 # コマンドラインに以下を入力し、エンターキーで実行
 bash ezinf_hbl.sh  # または bash ezinf_femur.sh
