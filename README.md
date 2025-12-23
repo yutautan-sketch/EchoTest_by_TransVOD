@@ -41,7 +41,7 @@ limitations under the License.
 また、CPU/GPU環境の違いによって挙動に差異が発生する可能性があります。
 
 ### 環境:
-CUDA >= 1.18 (学習時はCUDA必須)\
+CUDA >= 11.8 (学習時はCUDA必須)\
 python >= 3.7 (3.8以上を推奨)\
 PyTorch >= 2.1.2, torchvision >= 0.16.2
 ```
@@ -65,7 +65,7 @@ python setup.py build develop --user
 EchoTest_by_TransVOD/
 ├── results/
 │   └── transvod/
-│       └── hbl_251101/
+│       ├── hbl_251101/
 │       │   └── hbl_251101_mm=0.7_topk=3_boxes=gt/
 │       │       └── checkpoint0049.pth
 │       │       └── transformer_config.txt
@@ -93,7 +93,11 @@ EchoTest_by_TransVOD/
 ```
 
 3.\
-FLのみを測定する場合は`ezinf_femur.sh`を、BPD/AC/FLを測定する場合は`ezinf_hbl`を実行します\
+FLのみを測定する場合は`ezinf_femur.sh`を、BPD/AC/FLを測定する場合は`ezinf_hbl.sh`を実行します\
+```
+# コマンドラインに以下を入力し、エンターキーで実行
+bash ezinf_hbl.sh  # または bash ezinf_femur.sh
+```
 実行すると、以下のように：\
 A. 検出する最低確率（その物体がBPD/AC/FLである確率がAIにとって何パーセント以上の時に採用するか）\
 B. 動画の横幅（mm単位）\
