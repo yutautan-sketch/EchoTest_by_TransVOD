@@ -569,7 +569,7 @@ class HeadTiltDetector:
         # 楕円の取得
         ellipse = self.process_ellipse_detection(debugmode=debugmode)
         if ellipse is None:
-            print("適切な楕円が見つかりませんでした。")
+            print("頭部の楕円フィッティングに失敗しました。次のフレーム画像に移ります...")
             return None
 
         # 傾き判定

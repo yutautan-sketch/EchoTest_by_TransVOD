@@ -1,3 +1,4 @@
+# Modified by Kodaira Yuta
 # ------------------------------------------------------------------------------------------------
 # Deformable DETR
 # Copyright (c) 2020 SenseTime. All Rights Reserved.

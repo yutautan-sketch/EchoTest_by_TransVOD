@@ -118,73 +118,78 @@ def measure_head(
     )
     
     # 1. 特定クラスの最大確信度予測を抽出
-    bbox_imgs = []  # bbox_imgs[frame_idx] = [h, w, c]
+    candidates = []
     
-    # 1.1 各フレームの中で最もスコアが高いBBoxを集める
     for frame_idx, preds in enumerate(frames_bboxes, start=1):
-        best_score = -float('inf')
-        best_box = None
-        
-        # 最大スコアのBBoxを探索
-        for bbox, logits in preds:
-            # score = torch.softmax(logits, dim=-1)[0, target_label_num].item()  # 確信度
-            score = torch.sigmoid(logits[0, target_label_num]).item()
-            if score > best_score:
-                best_score = score
-                best_box = torch.tensor(bbox).to(device)
-                best_box = box_ops.box_cxcywh_to_xyxy(best_box.unsqueeze(0))[0].cpu().numpy()  # xyxy
-        if best_box is None:
+        if len(preds) == 0:
             continue
         
-        # 最大スコアBBoxの画像を保存
-        bbox_imgs.append([frame_idx, best_box])
-    
-    if len(bbox_imgs) == 0:
-        # print(f"ラベル {target_label_num} の検出が見つかりません。")
-        return None
-    
-    # 1.2 全BBox画像を model に入力してクラス0スコアで順位付け
-    best_frame_idx = 0
-    best_frame_img = None
-    best_box_coord = None
-    best_box_img = None
-    best_score = -float('inf')
-    for i, (frame_idx, best_box) in enumerate(bbox_imgs):
         # 該当フレームを特定 -> torch.tensor に変換
-        frame_path = f"{vid_path}/{vid_name}_all_{frame_idx:05d}.jpg"  
+        frame_path = f"{vid_path}/{vid_name}_all_{frame_idx:05d}.jpg"
         frame_img = cv2.imread(frame_path)
         if frame_img is None:
             print(f"Frame image not found: {frame_path}")
-            exit(1)
+            continue
         frame_img_pil = Image.fromarray(cv2.cvtColor(frame_img, cv2.COLOR_BGR2RGB))
         input_tensor = transform(frame_img_pil).unsqueeze(0).to(device)  # [1, C, H, W]
         
-        # BBoxの画像を取得
-        h, w, _ = frame_img.shape
-        best_box = best_box[0] * np.array([w, h, w, h])  # スケーリング
-        bbox_img = crop_image_with_margin(frame_img, best_box, 0.0, 0.0)
-        # bbox_img_pil = Image.fromarray(cv2.cvtColor(bbox_img, cv2.COLOR_BGR2RGB))
-        # input_tensor = transform(bbox_img_pil).unsqueeze(0).to(device)  # [1, C, H, W]
-        
-        # モデルに入力
+        # 該当フレームをモデルに入力 -> スコア取得
         with torch.no_grad():
             output = model(input_tensor)
             # score = torch.softmax(output, dim=1)[0, 0].item()  # クラス0のスコア
             score = torch.sigmoid(output[0, 0]).item()  # クラス0のスコア
-            
-            if score > best_score:
-                best_frame_idx = frame_idx
-                best_frame_img = frame_img
-                best_box_coord = best_box
-                best_box_img = bbox_img
-                best_score = score
-    cv2.imwrite("cropped.jpg", best_box_img)
+        
+        # 最大スコアのBBoxを探索
+        best_score = -float('inf')
+        best_box = best_logits = None
+        for bbox, logits in preds:
+            # score = torch.softmax(logits, dim=-1)[0, target_label_num].item()  # 確信度
+            score_bbox = torch.sigmoid(logits[0, target_label_num]).item()
+            if score_bbox > best_score:
+                best_score = score_bbox
+                best_box = bbox
+                best_logits = logits
+        
+        candidates.append((frame_idx, best_box, best_logits, score, frame_path))
     
-    # 2. HeadTiltDetector で傾き検出
-    result = detector.detect_head_tilt(best_box_img, debugmode=0)
+    if len(candidates) == 0:
+        return None
+    
+    candidates.sort(key=lambda x: x[3], reverse=True)  # x = (fidx, bbox, logits, score, fpath)
+    
+    # 2. スコア上位から HeadTiltDetector で傾き検出を行い、結果が None でなくなるまで続ける
+    result = None
+    best_box = None
+    best_frame_idx = None
+    best_score = None
+    frame_img = None
+    max_try = 10
+    
+    for try_num, cand in enumerate(candidates, start=1):
+        if try_num > max_try:
+            break
+        print(f"BPD: 確率{try_num}位のフレームを計測中...", end="")
+        
+        best_frame_idx = cand[0]
+        best_score = cand[3]
+        
+        best_box = torch.tensor(cand[1]).to(device)
+        best_box = box_ops.box_cxcywh_to_xyxy(best_box.unsqueeze(0))[0].cpu().numpy()  # xyxy
+        
+        best_frame_img = cv2.imread(cand[4])  # None の場合 candidates に追加されないため確認不要
+        h, w, _ = best_frame_img.shape
+        best_box = best_box[0] * np.array([w, h, w, h])  # スケーリング
+        best_box_img = crop_image_with_margin(best_frame_img, best_box, 0.0, 0.0)
+        
+        result = detector.detect_head_tilt(best_box_img, debugmode=0)
+        
+        if result is not None or try_num > max_try:
+            best_box_coord = best_box
+            print("頭部の楕円フィッティングに成功しました。")
+            break
 
     if result is None:
-        print("楕円フィッティングに失敗しました。")
+        print("BPD: 頭部の楕円フィッティングに失敗しました。")
         return None
 
     # 楕円の位置を元画像準拠に
@@ -271,49 +276,70 @@ def measure_body(
     from detection_tools.body_predict_show import body_detect, ellipse_perimeter
     assert not (normalize and img_size is not None), "normalize と img_size は同時に指定できません。"
     
-    # 1. frames_bboxes より最大スコアのBBoxを得る
-    best_score = -float('inf')
-    best_frame_idx = None
-    best_box = None
-    frame_path = ""
-    vid_name = os.path.basename(vid_path)
+    # 1. frames_bboxes をスコア順にソート
+    candidates = []
     for frame_idx, preds in enumerate(frames_bboxes, start=1):
-        # 最大スコアのBBoxを探索
         for bbox, logits in preds:
-            score = torch.softmax(logits, dim=-1)[0, target_label_num].item()  # 確信度
-            if score > best_score:
-                best_score = score
-                best_frame_idx = frame_idx
-                best_box = torch.tensor(bbox).to(device)
-                best_box = box_ops.box_cxcywh_to_xyxy(best_box.unsqueeze(0))[0].cpu().numpy()  # xyxy
-                frame_path = f"{vid_path}/{vid_name}_all_{frame_idx:05d}.jpg" 
-    if best_box is None:
+            # score = torch.softmax(logits, dim=-1)[0, target_label_num].item()
+            score = torch.sigmoid(logits[0, target_label_num]).item()
+            candidates.append((frame_idx, bbox, logits, score))
+    
+    if len(candidates) == 0:
         return None
     
-    # 2. 対応するフレーム画像よりBBoxを切り取る
-    frame_img = cv2.imread(frame_path)
-    if frame_img is None:
-        print(f"Frame image not found: {frame_path}")
-        exit(1)
-    h, w, _ = frame_img.shape
-    best_box = best_box[0] * np.array([w, h, w, h])  # スケーリング
-    bbox_img = crop_image_with_margin(frame_img, best_box, 0.0, 0.0)
-    if debugmode > 0:
-        cv2.imwrite(os.path.join(result_path, f"result_cropped_body.jpg"), bbox_img)
+    candidates.sort(key=lambda x: x[3], reverse=True)  # x = (fidx, bbox, logits, score)
     
-    # 3. 測定結果を得る
-    bbox_img = cv2.cvtColor(bbox_img, cv2.COLOR_BGR2GRAY)
-    result = body_detect(
-        img=bbox_img,
-        max_attempt=max_attempt,
-        combine_num=combine_num,
-        mask_size=mask_size,
-        mask_mode=mask_mode,
-        debugmode=debugmode,
-    )
+    # 2. スコア上位から腹部計測を行い、結果が None でなくなるまで続ける
+    result = None
+    best_box = None
+    best_frame_idx = None
+    best_score = None
+    frame_img = None
+    max_try = 10
+    vid_name = os.path.basename(vid_path)
+    
+    for try_num, cand in enumerate(candidates, start=1):
+        if try_num > max_try:
+            break
+        print(f"AC : 確率{try_num}位のフレームを計測中...", end="")
+        
+        best_frame_idx = cand[0]
+        best_score = cand[3]
+        
+        best_box = torch.tensor(cand[1]).to(device)
+        best_box = box_ops.box_cxcywh_to_xyxy(best_box.unsqueeze(0))[0].cpu().numpy()  # xyxy
+        
+        frame_path = f"{vid_path}/{vid_name}_all_{best_frame_idx:05d}.jpg"
+        frame_img = cv2.imread(frame_path)
+        if frame_img is None:
+            print(f"Frame image not found: {frame_path}")
+            continue
+        
+        h, w, _ = frame_img.shape
+        best_box = best_box[0] * np.array([w, h, w, h])  # スケーリング
+        bbox_img = crop_image_with_margin(frame_img, best_box, 0.0, 0.0)
+        if debugmode > 0:
+            cv2.imwrite(os.path.join(result_path, f"result_cropped_body.jpg"), bbox_img)
+    
+        # 2.1. 測定結果を得る
+        bbox_img = cv2.cvtColor(bbox_img, cv2.COLOR_BGR2GRAY)
+        result = body_detect(
+            img=bbox_img,
+            max_attempt=max_attempt,
+            combine_num=combine_num,
+            mask_size=mask_size,
+            mask_mode=mask_mode,
+            debugmode=debugmode,
+        )
+        if result is not None:
+            print("腹部の円フィッティングに成功しました。")
+            break
+    
     if result is None:
+        print("AC : 腹部の円フィッティングに失敗しました。")
         return None
     
+    # 3. 結果の保存
     img_cp, ellipse, circle = result
     frame_img_pil = Image.fromarray(frame_img)
     img_cp_pil = Image.fromarray(img_cp)

@@ -196,7 +196,9 @@ def body_detect(img,
                 # print(f"腹部測定結果: ({x}, {y}), 半径={r}")
                 best_circle = ((x, y), (r, r), 0.0)  # 楕円と型式を統一
                 break
+    
+    if best_ellipse is not None or best_circle is not None:
         return img_cp, best_ellipse, best_circle
     else:
-        print("腹部の測定に失敗しました。")
+        print("腹部の円フィッティングに失敗しました。次のフレーム画像に移ります...")
         return None

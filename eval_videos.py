@@ -160,6 +160,7 @@ def main(args, opt):
         import util.misc_multi as utils
 
     print(args.dataset_file)
+    args.device = args.device if torch.cuda.is_available() else 'cpu'
     device = torch.device(args.device)
     utils.init_distributed_mode(args)
     print("git:\n  {}\n".format(utils.get_sha()))
